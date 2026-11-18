@@ -4,11 +4,13 @@ def opn():
         g = glob.glob('/dev/serial/by-id/*%s*' % sys.argv[1])
         if g:
             try:
-                s = serial.Serial(); s.port = os.path.realpath(g[0]); s.baudrate = 115200; s.timeout = 0.05; s.dtr = True; s.rts = True; s.open(); return s
+                s = serial.Serial(); s.port = os.path.realpath(g[0]); s.baudrate = 115200; s.timeout = 0.05; s.write_timeout = 1; s.dtr = True; s.rts = True; s.open(); return s
             except Exception: pass
         time.sleep(0.1)
 def req(s, c):
-    s.write(c); buf = b''; end = time.time() + 2
+    try: s.write(c)
+    except serial.SerialTimeoutException: return []   # normal mode: the pad doesn't read
+    buf = b''; end = time.time() + 2
     while time.time() < end:
         buf += s.read(512)
         lines = buf.decode(errors='replace').split('\n')

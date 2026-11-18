@@ -54,6 +54,8 @@ up() {
 make > "$T/build.log" 2>&1 && make SELFTEST=1 >> "$T/build.log" 2>&1 && make -C client build >> "$T/build.log" 2>&1 ||
 	{ tail -5 "$T/build.log"; echo "FAIL build"; exit 1; }
 [ -n "$(dev)" ] || { echo "FAIL no serial port for $SN"; exit 1; }
+# The pad's own setup is read on the normal firmware (the self-test build has its own).
+up .build/firmware || exit 1
 timeout 30 $CLIENT pull --port "$(dev)" "$T/before.toml" > /dev/null 2>&1 || fail "pull the pad's setup before the run"
 since=$(date '+%Y-%m-%d %H:%M:%S')
 
@@ -70,7 +72,7 @@ if up .build/selftest; then
 	done
 	timeout 60 python3 -I -u "$H/fresh.py" "$SN" reset || fail "reset before the rerun"
 	sleep 100
-	step "rerun: first report" 1 timeout 60 python3 -I -u "$H/rerun.py" "$SN" first "$T/first"
+	step "rerun: first report" 2 timeout 60 python3 -I -u "$H/rerun.py" "$SN" first "$T/first"
 	step "rerun" 1 timeout 90 python3 -I -u "$H/rerun.py" "$SN" rerun "$T/first"
 	timeout 30 python3 -I -u "$H/commit.py" "$SN" > "$T/commit.log" 2>&1 || fail "commit before the protocol checks"
 	sleep 3

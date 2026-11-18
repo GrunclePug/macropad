@@ -3,7 +3,8 @@
 # PUSHES saves of the pad's own setup on the normal firmware (each a COMMIT,
 # a restart and the client's reboot check), then CYCLES restarts into recovery
 # and back on the self-test build (soak.py), then the normal firmware again
-# with the pad's setup checked unchanged. Start it right after plugging the
+# with the pad's setup checked unchanged (it starts by uploading the normal
+# firmware to read that setup). Start it right after plugging the
 # pad in, so no earlier self-test detach shares the power session.
 # Exits 0 only if every restart came back.
 #
@@ -39,6 +40,8 @@ make > "$T/build.log" 2>&1 && make SELFTEST=1 >> "$T/build.log" 2>&1 && make -C 
 	{ tail -5 "$T/build.log"; echo "FAIL build"; exit 1; }
 [ -n "$(dev)" ] || { echo "FAIL no serial port for $SN"; exit 1; }
 since=$(date '+%Y-%m-%d %H:%M:%S')
+# The pad's own setup is read on the normal firmware (the self-test build has its own).
+up .build/firmware || exit 1
 timeout 30 $CLIENT pull --port "$(dev)" "$T/before.toml" > /dev/null 2>&1 || { echo "FAIL pull the pad's setup first"; exit 1; }
 
 ok=0

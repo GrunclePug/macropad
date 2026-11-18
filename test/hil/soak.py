@@ -25,7 +25,7 @@ def opn():
     for _ in range(20):
         try:
             s = serial.Serial(); s.port = p; s.baudrate = 115200; s.timeout = 0.005
-            s.dtr = True; s.rts = True; s.open(); return s
+            s.write_timeout = 1; s.dtr = True; s.rts = True; s.open(); return s
         except Exception:
             time.sleep(0.2)
     raise RuntimeError('open failed')
@@ -55,7 +55,8 @@ def line(s, timeout):
 
 def req(s, cmd, timeout=2.0):
     """Send a command; return (lines before the final, final line)."""
-    s.write((cmd + '\n').encode())
+    try: s.write((cmd + '\n').encode())
+    except serial.SerialTimeoutException: return [], None   # normal mode: the pad doesn't read
     got = []
     end = time.time() + timeout
     while time.time() < end:

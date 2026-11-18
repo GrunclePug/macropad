@@ -17,7 +17,12 @@ if step == 'first':      # the boot run's report: read, not acknowledged
     s, out = knock_read(4)
     summaries = [l for l in out.split('\n') if 'checks,' in l]
     print('first report:', summaries)
+    for l in out.split('\n'):
+        if l.startswith(('# FAIL', '# cleanup', '# latency_us', '# loop')): print('  ' + l.strip())
     print('PASS' if summaries else 'FAIL', "the boot run's report is handed out")
+    # The boot run is the self-test with no host program holding the port.
+    ok = bool(summaries) and ' 0 failed ' in summaries[-1]
+    print('PASS' if ok else 'FAIL', 'the boot run (no host load) passed every check')
     open(state, 'w').write(summaries[-1] if summaries else '')
     s.write(b'EXIT\n'); time.sleep(0.5); s.close()
 elif step == 'rerun':    # TESTRUN without TESTACK, then cut the new run short
