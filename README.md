@@ -9,7 +9,7 @@ macropad is firmware for a small USB HID pad built on an Arduino Nano ESP32, wit
 ## Features
 
 * **Key layouts**: an osu!mania layout (D, F, J, K) and a stream-deck layout (F13 and up, tool toggles, encoder volume).
-* **Live keys**: the osu!mania screen shows each held key as `[#]`; a low-latency mode keeps the screen static instead.
+* **Live keys**: the osu!mania screen shows a large `[ ]` per key that fills to `[#]` while held; a low-latency mode shows the key letters on a static screen instead.
 * **Autoclicker**: clicks a mouse button at a random interval between a minimum and a maximum.
 * **Jitter**: moves the pointer out and back, then pauses for a random time.
 * **Key spam**: presses a chosen key at a random interval.

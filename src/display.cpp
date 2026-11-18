@@ -183,16 +183,25 @@ void render(const Core& c, uint32_t now) {
 
   const Keymap& km = v.keymaps[e.index];
   if (!km.legend && c.live(e.index)) {
-    // Live keys: [#] for each key being sent, rows of four, label underneath.
+    // Live keys: [ ] or [#] per key being sent, at the size of the
+    // low-latency letters, rows of four. At text size 2 "[#]" would be 36 px
+    // wide, so the glyphs are placed by hand: '[' and ']' are narrow (ink in
+    // columns 1-3 of 5), which packs a box into about 22 px.
     uint8_t held = c.held_keys();
+    g.setTextSize(2);
     for (uint8_t k = 0; k < v.keys; k++) {
-      int col = k % 4, row = k / 4;
-      int x = (W - 4 * 24) / 2 + col * 24 + 3, yy = 22 + row * 20;
+      int x = 6 + (k % 4) * 30;
+      int yy = v.keys <= 4 ? 28 : 18 + (k / 4) * 20;
       g.setCursor(x, yy);
-      g.print(held & (1u << k) ? "[#]" : "[ ]");
-      g.setCursor(x + 6, yy + 9);
-      g.print(text(km.keys[k].label));
+      g.print('[');
+      if (held & (1u << k)) {
+        g.setCursor(x + 10, yy);
+        g.print('#');
+      }
+      g.setCursor(x + 16, yy);
+      g.print(']');
     }
+    g.setTextSize(1);
     if (v.keys <= 4) {
       g.setCursor(0, H - 8);
       g.print("Live keys");
