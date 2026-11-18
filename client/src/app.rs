@@ -46,6 +46,9 @@ pub struct App {
     connecting_serial: Option<String>,
     /// The setup a Save in flight sent.
     saving: Option<Config>,
+    /// Saves whose outcome stayed open (a reboot check that timed out, an
+    /// E_VERIFY): any of them may be what the pad now holds.
+    unresolved: Vec<Config>,
     busy: Option<String>,
     status: String,
     error: Option<String>,
@@ -74,6 +77,7 @@ impl App {
             snapshot_serial: None,
             connecting_serial: None,
             saving: None,
+            unresolved: Vec::new(),
             busy: None,
             status: "Plug in the pad, pick its port and press Connect.".into(),
             error: None,
@@ -114,6 +118,7 @@ impl App {
                     if self.saving.as_ref() == Some(&c) {
                         self.saving = None;
                     }
+                    self.unresolved.clear();
                     self.snapshot = Some(c);
                 }
                 if let Some(s) = self.session.as_mut() {
@@ -132,6 +137,7 @@ impl App {
                 if let Some(sent) = self.saving.take() {
                     self.snapshot = Some(sent);
                 }
+                self.unresolved.clear();
                 // The pad restarted with this record: out of recovery.
                 if let Some(s) = self.session.as_mut() {
                     s.hello.mode = "config".into();
@@ -139,8 +145,23 @@ impl App {
                 }
                 self.status = "Saved. The pad restarted with the new setup.".into();
             }
-            Resp::Refused(e) => self.error = Some(format!("The pad refused this setup: {e}")),
-            Resp::Failed(m) => self.error = Some(m),
+            Resp::Refused(e) => {
+                // A refusal is definitive, except E_VERIFY: written, read-back
+                // differed, so it may be what the pad holds.
+                if let Some(sent) = self.saving.take()
+                    && e.code == 106
+                {
+                    self.unresolved.push(sent);
+                }
+                self.error = Some(format!("The pad refused this setup: {e}"));
+            }
+            Resp::Failed(m) => {
+                // The outcome is open: keep the record as a candidate.
+                if let Some(sent) = self.saving.take() {
+                    self.unresolved.push(sent);
+                }
+                self.error = Some(m);
+            }
             Resp::Left => {
                 self.status = "The pad left config mode. Save will ask it back.".into();
             }
@@ -247,9 +268,12 @@ impl App {
             self.snapshot_serial.is_some() && self.snapshot_serial == self.connecting_serial;
         // A Save whose outcome was unclear and which the pad now holds landed:
         // it, not the older snapshot, is what the editor's edits stand on.
-        if same_pad && self.saving.as_ref() == Some(pad) {
-            self.snapshot = self.saving.take();
+        if same_pad && (self.saving.as_ref() == Some(pad) || self.unresolved.contains(pad)) {
+            self.snapshot = Some(pad.clone());
         }
+        // Whatever the outcome, a fresh read settles every open Save.
+        self.saving = None;
+        self.unresolved.clear();
         let unsaved = self.snapshot.as_ref().is_some_and(|old| *old != self.cfg);
         let Some(old) = self.snapshot.clone().filter(|_| same_pad && unsaved) else {
             if unsaved {
@@ -1225,5 +1249,49 @@ mod tests {
         a.handle(Resp::Landed(a.cfg.encode().expect("encode")));
         let h = &a.session.as_ref().expect("session").hello;
         assert_eq!((h.mode.as_str(), h.cfg.as_str()), ("config", "ok"));
+    }
+
+    #[test]
+    fn a_failed_retry_doesnt_hide_an_earlier_save_that_landed() {
+        let mut a = app();
+        let mut five = a.cfg.clone();
+        five.release_ms = 5;
+        let mut ten = five.clone();
+        ten.release_ms = 10;
+        a.snapshot = Some(five.clone());
+        a.snapshot_serial = Some("A".into());
+        a.connecting_serial = Some("A".into());
+        a.saving = Some(ten.clone()); // Save 10 ms: E_VERIFY, it reached flash
+        a.handle(Resp::Refused(crate::protocol::DeviceError {
+            code: 106,
+            offset: 0,
+            text: "read-back differs".into(),
+        }));
+        a.cfg = five.clone(); // edited back to 5 ms
+        a.saving = Some(five.clone()); // the retry fails before COMMIT
+        a.handle(Resp::Failed("no reply".into()));
+        let session = Session {
+            hello: crate::protocol::Hello {
+                fw: "0.3.0".into(),
+                mode: "config".into(),
+                cfg: "ok".into(),
+                crc: None,
+                boot: 3,
+                sn: None,
+            },
+            pins: PIN_NAMES
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (u8::try_from(i).expect("16 pins"), (*n).to_string()))
+                .collect(),
+            tools: builtin_tools(),
+            record: ten.encode().expect("encode"), // the pad holds 10 ms
+        };
+        a.on_connect(session);
+        assert_eq!(a.cfg.release_ms, 5, "the edit back to 5 ms survives");
+        assert!(
+            a.unresolved.is_empty() && a.saving.is_none(),
+            "the read settled them"
+        );
     }
 }

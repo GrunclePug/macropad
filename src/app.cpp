@@ -64,8 +64,19 @@ void stage_default() {
   config_encode(d, env.staging);
 }
 
+// HELLO's crc from what flash holds now, read back (after an E_VERIFY the
+// write happened but its read-back differed, so RAM can't be trusted).
+void crc_from_flash() {
+  static uint8_t rec[CFG_SIZE];
+  size_t n = store_read(rec);
+  env.has_crc = n == CFG_SIZE && !config_validate(rec, n).code;
+  env.stored_crc = env.has_crc ? config_crc(rec) : 0;
+  if (env.has_crc && !strcmp(cfg_status, "none")) strcpy(cfg_status, "ok");
+}
+
 uint8_t do_commit(const uint8_t* rec) {
   uint8_t r = store_write(rec);
+  if (r == E_VERIFY) crc_from_flash();
   if (r == E_OK) {
     core.freeze();  // terminal: no dispatch, no pad input until the restart
     restart_armed = true;
@@ -164,6 +175,12 @@ void enter_config(bool recovery, bool by_knock = false) {
     stage_default();
   else if (n != CFG_SIZE || config_validate(env.staging, n).code)
     config_encode(cfg, env.staging);
+  else {
+    // Staging is the stored record: HELLO reports exactly its crc, so what
+    // a client reads and the crc it's told always agree.
+    env.has_crc = true;
+    env.stored_crc = config_crc(env.staging);
+  }
 }
 
 void serve_config(uint32_t now) {

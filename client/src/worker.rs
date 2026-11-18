@@ -94,8 +94,7 @@ impl Worker {
                 recovery: false,
                 boot: 0,
                 expected_crc: None,
-                attempted_crc: None,
-                attempted_rec: None,
+                attempted: Vec::new(),
                 connect_cfg: String::new(),
                 out: resp_tx,
                 wake: Box::new(wake),
@@ -139,11 +138,10 @@ struct State<P: Ports> {
     /// pad that restarted on its own still counts as this session if it
     /// holds exactly this.
     expected_crc: Option<u32>,
-    /// The crc of the record the last Save sent: if its reboot check timed
-    /// out but the save landed, the pad holds this one.
-    attempted_crc: Option<u32>,
-    /// That Save's record.
-    attempted_rec: Option<Vec<u8>>,
+    /// Saves whose outcome is still open (crc, record): a reboot check that
+    /// timed out or an E_VERIFY may still have landed. Every one is kept, so
+    /// a later retry can't hide an earlier one that did land.
+    attempted: Vec<(u32, Vec<u8>)>,
     /// `cfg` at Connect: a pad with no stored record that restarted is the
     /// same session only if this is unchanged.
     connect_cfg: String,
@@ -271,8 +269,7 @@ impl<P: Ports> State<P> {
         self.recovery = hello.mode == "recovery";
         self.boot = hello.boot;
         self.expected_crc = hello.crc;
-        self.attempted_crc = None;
-        self.attempted_rec = None;
+        self.attempted.clear();
         self.connect_cfg = hello.cfg.clone();
         self.in_config = true;
         self.client = Some(c);
@@ -363,7 +360,9 @@ impl<P: Ports> State<P> {
             self.emit(Resp::Disconnected);
             return Err(e);
         }
-        let known = h.crc.is_some() && (h.crc == self.expected_crc || h.crc == self.attempted_crc);
+        let known = h.crc.is_some_and(|c| {
+            Some(c) == self.expected_crc || self.attempted.iter().any(|(a, _)| *a == c)
+        });
         // A stored record this session didn't read or send: edited on the pad.
         // Any crc this session doesn't know: a fresh pad whose entry save
         // failed reports its staged edits' crc while still `cfg none`.
@@ -391,20 +390,21 @@ impl<P: Ports> State<P> {
             self.emit(Resp::Disconnected);
             bail!("{why}; connect again to load it");
         }
-        if h.crc.is_some() && h.crc == self.attempted_crc {
-            // The last Save did land: tell the GUI which record, so its
+        if let Some(c) = h.crc
+            && let Some(i) = self.attempted.iter().position(|(a, _)| *a == c)
+        {
+            // An earlier Save did land: tell the GUI which record, so its
             // snapshot follows (not whatever the current request sends).
-            self.expected_crc = self.attempted_crc.take();
-            if let Some(rec) = self.attempted_rec.take() {
-                self.emit(Resp::Landed(rec));
-            }
+            let (crc, rec) = self.attempted.swap_remove(i);
+            self.attempted.clear();
+            self.expected_crc = Some(crc);
+            self.emit(Resp::Landed(rec));
         } else if restarted && (h.crc == self.expected_crc || (h.crc.is_none() && h.cfg != "ok")) {
             // Conclusively not landed: after a restart the pad reports its
             // flash, and that's the record read at Connect, or still none.
             // Without one, HELLO's crc is the pad's RAM copy, which an
             // E_VERIFY leaves at the old value.
-            self.attempted_crc = None;
-            self.attempted_rec = None;
+            self.attempted.clear();
         }
         self.boot = h.boot;
         self.recovery = h.mode == "recovery";
@@ -433,8 +433,7 @@ impl<P: Ports> State<P> {
         self.client()?.put_record(rec)?;
         self.client()?.check()?;
         // Until the reboot check decides, the pad may hold this record.
-        self.attempted_crc = Some(stored_crc(rec));
-        self.attempted_rec = Some(rec.to_vec());
+        self.attempted.push((stored_crc(rec), rec.to_vec()));
         self.emit(Resp::Progress("Saving".into()));
         match self.client()?.commit() {
             Ok(_) => {}
@@ -444,8 +443,7 @@ impl<P: Ports> State<P> {
                 if e.downcast_ref::<DeviceError>()
                     .is_some_and(|d| d.code != 106) =>
             {
-                self.attempted_crc = None;
-                self.attempted_rec = None;
+                self.attempted.pop(); // this one didn't land; earlier ones may have
                 return Err(e);
             }
             Err(e) if e.is::<DeviceError>() => return Err(e),
@@ -501,8 +499,7 @@ impl<P: Ports> State<P> {
                     self.path = path;
                     self.boot = h.boot;
                     self.expected_crc = Some(want);
-                    self.attempted_crc = None;
-                    self.attempted_rec = None;
+                    self.attempted.clear();
                     let _ = c.exit();
                     return Ok(());
                 }
@@ -882,24 +879,60 @@ mod tests {
     fn an_unverified_commit_may_still_have_landed() {
         let (pad, w, s) = setup();
         let new = edited(&s.record);
-        {
-            let mut p = pad.lock();
-            p.fail_commit_code = Some(106); // E_VERIFY: written, read-back differed
-        }
+        pad.lock().fail_commit_code = Some(106); // E_VERIFY: written, read-back differed
         w.send(Req::Save(new.clone()));
         assert!(matches!(next(&w), Resp::Refused(_)));
         pad.lock().fail_commit_code = None;
-        // No restart yet: HELLO still shows the old crc from RAM, which must
-        // not settle it.
-        w.send(Req::Check(s.record.clone()));
-        assert!(matches!(next(&w), Resp::Checked));
-        pad.lock().restart(); // now it boots on the record that landed
+        // No restart: HELLO's crc comes from flash, so the next request
+        // already sees the record that landed.
         w.send(Req::Check(new.clone()));
         let Resp::Landed(rec) = next(&w) else {
             panic!("not recognised as landed")
         };
         assert_eq!(rec, new);
         assert!(matches!(next(&w), Resp::Checked));
+    }
+
+    #[test]
+    fn a_reconnect_after_e_verify_sees_one_baseline() {
+        let (pad, w, s) = setup();
+        let new = edited(&s.record);
+        pad.lock().fail_commit_code = Some(106);
+        w.send(Req::Save(new.clone()));
+        assert!(matches!(next(&w), Resp::Refused(_)));
+        pad.lock().fail_commit_code = None;
+        drop(w);
+        // Reconnect on the same boot: staging and HELLO's crc agree...
+        let (w, s2) = connect_to(&pad);
+        assert_eq!(s2.record, new);
+        assert_eq!(s2.hello.crc, Some(stored_crc(&new)));
+        // ...and a reboot changes nothing for that session.
+        pad.lock().restart();
+        w.send(Req::Check(new));
+        assert!(matches!(next(&w), Resp::Checked));
+    }
+
+    #[test]
+    fn a_failed_retry_keeps_an_earlier_candidate() {
+        let (pad, w, s) = setup();
+        pad.lock().no_reboot = true;
+        let first = edited(&s.record); // its reboot check times out, but it landed
+        w.send(Req::Save(first.clone()));
+        assert!(matches!(next(&w), Resp::Failed(_)));
+        {
+            let mut p = pad.lock();
+            p.no_reboot = false;
+            p.fail_commit = true; // the retry's COMMIT is refused
+        }
+        let mut c = Config::decode(&s.record).expect("decode");
+        c.release_ms = 7;
+        w.send(Req::Save(c.encode().expect("encode")));
+        // The first Save is recognised on the retry's ready() and reported.
+        let Resp::Landed(rec) = next(&w) else {
+            panic!("the earlier Save was forgotten")
+        };
+        assert_eq!(rec, first);
+        assert!(matches!(next(&w), Resp::Refused(_)));
     }
 
     #[test]

@@ -480,6 +480,14 @@ pub fn merge3(base: &[u8], mine: &[u8], theirs: &[u8]) -> Result<(Vec<u8>, Vec<u
         // One side kept the list as it was: the other side's order wins,
         // and each set both sides have merges field by field.
         let order = if ids(&m) == ids(&b) { &t } else { &m };
+        // A set the order's side deleted but the other side edited: the
+        // deletion wins, and the lost edit is named.
+        let other = if ids(&m) == ids(&b) { &m } else { &t };
+        for (id, bs) in &b {
+            if find(order, id).is_none() && find(other, id).is_some_and(|os| os != *bs) {
+                conflicts.push(COUNT);
+            }
+        }
         order
             .iter()
             .enumerate()
@@ -879,6 +887,32 @@ mod tests {
         let ids: Vec<&str> = m.sets.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, ["osu", "stream"]);
         assert!(conflicts.contains(&67), "{conflicts:?}");
+    }
+
+    #[test]
+    fn merge3_names_an_edit_to_a_set_the_other_side_deleted() {
+        let base = vector("default.hex"); // osu, stream, media
+        let mut mine = Config::decode(&base).expect("decode");
+        mine.sets[1].flags &= !SET_LEGEND; // the editor turns off stream's labels
+        let mut theirs = Config::decode(&base).expect("decode");
+        theirs.sets.remove(1); // a push removed stream
+        let (out, conflicts) = merge3(
+            &base,
+            &mine.encode().expect("e"),
+            &theirs.encode().expect("e"),
+        )
+        .expect("merge");
+        let m = Config::decode(&out).expect("decodes");
+        let ids: Vec<&str> = m.sets.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["osu", "media"]);
+        assert_eq!(
+            m.sets[1].flags, theirs.sets[1].flags,
+            "media never inherits stream's edit"
+        );
+        assert!(
+            conflicts.contains(&67),
+            "the lost edit is named: {conflicts:?}"
+        );
     }
 
     #[test]

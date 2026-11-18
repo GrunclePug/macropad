@@ -89,6 +89,8 @@ impl Pad {
         self.mode = Mode::Normal;
         self.boot = self.boot.wrapping_mul(2_654_435_761).wrapping_add(7);
         self.report_crc = None; // a boot reads the crc from flash
+        // ...and decides recovery from what flash holds.
+        self.recovery = !self.stored.is_empty() && Config::decode(&self.stored).is_err();
         self.staging = if self.stored.is_empty() || self.recovery {
             self.default.clone()
         } else {
@@ -183,11 +185,10 @@ impl Pad {
                 }
                 if let Some(code) = self.fail_commit_code {
                     if code == 106 {
-                        // Written, read-back differed: flash holds it, but the
-                        // firmware's RAM crc (what HELLO reports) keeps the
-                        // old value until the next boot.
-                        self.report_crc = Some(stored_crc(&self.stored));
+                        // Written, read-back differed: flash holds it, and the
+                        // firmware re-reads flash for HELLO's crc.
                         self.stored = self.staging.clone();
+                        self.report_crc = None;
                     }
                     return self.err(code, 0, "E_VERIFY: read-back differs");
                 }
