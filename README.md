@@ -64,8 +64,8 @@ Note: All scripts are non-blocking and can be run at the same time.
 
 ### Using Git (Recommended)
 
-1. Clone the repository: git clone https://github.com/GrunclePug/MacroPad.git
-2. Open the MacroPad.ino file in the Arduino IDE.
+1. Clone the repository: git clone https://github.com/GrunclePug/macropad.git
+2. Open the macropad.ino file in the Arduino IDE.
 3. Ensure the necessary libraries are installed (see Requirements below).
 4. Upload the sketch to your microcontroller.
 
@@ -73,7 +73,7 @@ Note: All scripts are non-blocking and can be run at the same time.
 
 1. Download the ZIP file containing the source code.
 2. Extract the files to a directory of your choice.
-3. Open the MacroPad.ino file in the Arduino IDE.
+3. Open the macropad.ino file in the Arduino IDE.
 4. Ensure the necessary libraries are installed (see Requirements below).
 5. Upload the sketch to your microcontroller.
 
