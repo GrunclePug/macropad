@@ -1,0 +1,11 @@
+profiles:
+  nano_esp32:
+    fqbn: arduino:esp32:nano_nora:PinNumbers=default,USBMode=default
+    platforms:
+      - platform: arduino:esp32 (2.0.18-arduino.5)
+    libraries:
+      - Adafruit GFX Library (1.12.4)
+      - Adafruit BusIO (1.17.4)
+      - Adafruit SSD1306 (2.5.16)
+
+default_profile: nano_esp32

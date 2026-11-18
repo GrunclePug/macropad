@@ -1,104 +1,91 @@
-# MacroPad
+# macropad
 
-A custom, open-source macro pad project written for an Arduino-compatible microcontroller, featuring configurable autoclicker, jitter, and mouse hold scripts.
+A handheld USB macropad for game automation, rhythm games and stream-deck shortcuts.
 
 ## Overview
 
-MacroPad is a project designed for a custom hardware macro pad. It serves as a reference implementation for creating your own custom HID (Human Interface Device) macros.
+macropad is firmware for a small USB HID pad built on an Arduino Nano ESP32, with mechanical keys, two small buttons and an SSD1306 OLED. It runs automation tools (autoclicker, mouse jitter, mouse hold) next to plain key layouts, with a global killswitch that stops all output. It needs no software on the host: it shows up as a standard keyboard and mouse.
+
+The firmware is being rewritten. This README describes the current firmware, `v0.1.0`.
 
 ## Features
 
-* Modular Codebase: The project logic is separated into distinct files, making it easy to understand and modify.
-
-### User Interface & Navigation
-* Killswitch:
-
-  * Tap: Toggles the killswitch, which pauses the execution of all scripts. You can still interact with the menu and change settings, but no macros will run.
-
-  * Hold: Immediately disables all scripts, returning the device to a neutral state.
-
-* Navigation Button: This button's function changes depending on whether you're in the main menu or actively using a script.
-
-  * Tap (not in menu): Toggles the currently selected script on or off.
-
-  * Tap (while in menu): Navigates to the next script in the list.
-
-  * Hold (not in menu): Opens the main menu.
-
-  * Hold (while in menu): Selects the currently highlighted script as the new active script. The display will update to show the newly selected script and its messages.
-
-### Scripts
-Note: All scripts are non-blocking and can be run at the same time.
-
-* Gamepad:
-
-  * Buttons 1-4 are assigned for general gamepad functions.
-
-* Autoclicker: An autoclicker with adjustable delays.
-
-  * Button 1: Decrements the minimum delay.
-
-  * Button 2: Increments the minimum delay.
-
-  * Button 3: Decrements the maximum delay.
-
-  * Button 4: Increments the maximum delay.
-
-* Jitter: A customizable script that simulates mouse jitter.
-
-  * Button 1: Decrements the minimum delay.
-
-  * Button 2: Increments the minimum delay.
-
-  * Button 3: Decrements the maximum delay.
-
-  * Button 4: Increments the maximum delay.
-
-* Mouse Hold: A toggleable script to hold a mouse button down.
-
-  * Button 1: Toggles Left Mouse Button (LMB) hold.
-
-  * Button 2: Toggles Right Mouse Button (RMB) hold.
+* **Killswitch**: pauses every script at once; a long press switches them all off.
+* **Script menu**: pick a script on the OLED and toggle it with the nav button.
+* **Gamepad**: the four keys send D, F, J and K.
+* **Autoclicker**: clicks at a random interval between an adjustable minimum and maximum.
+* **Jitter**: moves the mouse back and forth at an adjustable interval.
+* **Mouse hold**: holds the left or right mouse button down.
+* **Concurrent scripts**: scripts don't block, and several can run at once.
+* **Pinned build**: a `sketch.yaml` profile pins the board core and libraries, so every machine builds the same firmware.
 
 ## Installation
 
-### Using Git (Recommended)
+### Requirements
 
-1. Clone the repository: git clone https://github.com/GrunclePug/macropad.git
-2. Open the macropad.ino file in the Arduino IDE.
-3. Ensure the necessary libraries are installed (see Requirements below).
-4. Upload the sketch to your microcontroller.
-
-### Using a ZIP File
-
-1. Download the ZIP file containing the source code.
-2. Extract the files to a directory of your choice.
-3. Open the macropad.ino file in the Arduino IDE.
-4. Ensure the necessary libraries are installed (see Requirements below).
-5. Upload the sketch to your microcontroller.
-
-## Requirements
-
-Hardware:
+* [arduino-cli](https://arduino.github.io/arduino-cli/) 1.5 or later, and Make
 * Arduino Nano ESP32
-* I2C 128x64 OLED display
-* 6x Buttons (4 main, killswitch, nav)
+* 128×64 SSD1306 OLED on I2C (address `0x3C`)
+* 4 key switches and 2 small push buttons
 
-Software:
-* Arduino IDE (install from https://www.arduino.cc/en/software)
-* The standard Arduino Keyboard.h and Mouse.h libraries.
-* The Adafruit SSD1306 library by Adafruit along with it’s dependencies.
+The profile installs the `arduino:esp32` core and the Adafruit GFX, BusIO and SSD1306 libraries on the first build.
+
+### Build
+
+```sh
+git clone https://github.com/GrunclePug/macropad.git
+cd macropad
+make
+make upload PORT=/dev/ttyACM0
+```
+
+## Usage
+
+Plug the pad into a computer. It starts with every script off.
+
+| Key | Action |
+| --- | --- |
+| Killswitch, tap | Pause or resume all scripts |
+| Killswitch, hold | Switch every script off |
+| Nav, hold | Open the menu, or confirm the selected script |
+| Nav, tap (menu) | Select the next script |
+| Nav, tap | Toggle the selected script |
+| Keys 1–4 | Script controls: gamepad keys, or delay down and up for the autoclicker and jitter, or left and right hold for mouse hold |
+
+### Configuration
+
+| Variable | Flag | Default | Description |
+| --- | --- | --- | --- |
+| `VARIANT` | `make VARIANT=...` | `pad` | Hardware variant to build |
+| `PORT` | `make upload PORT=...` | none | The board's serial device; use the real device (`/dev/ttyACM0`), not a `/dev/serial/by-id/` link |
+
+## Wiring
+
+Every input uses the Nano's internal pull-up and switches to GND. No other parts are needed.
+
+| Pin | Connects to |
+| --- | --- |
+| D2, D3, D4, D5 | Keys 1 to 4 |
+| D6 | Killswitch |
+| D7 | Nav button |
+| A4 (SDA), A5 (SCL) | OLED |
+| 3V3, GND | OLED power |
+
+## Development
+
+* Build: `make`
+* Build one variant: `make VARIANT=pad`
+* Flash: `make upload PORT=/dev/ttyACM0`
+* Clean: `make clean`
 
 ## Contributing
 
-Contributions are welcome! If you'd like to contribute to this project, please fork the repository and submit a pull request.
+Fork the repository and open a pull request.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
 
 ## Author
 
-Chad Humphries |
-[Website](https://grunclepug.com/) |
-[GitHub Profile](https://github.com/GrunclePug)
-
-## Other Projects
-
-Check out some of my other projects on GitHub: [Here](https://github.com/GrunclePug?tab=repositories)
+Chad Humphries | [Website](https://grunclepug.com/) | [GitHub](https://github.com/GrunclePug) | [More projects](https://github.com/GrunclePug?tab=repositories)
