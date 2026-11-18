@@ -300,22 +300,26 @@ impl<P: Ports> State<P> {
                 }
             }
         };
-        if h.boot != self.boot {
-            // A restart (the pad's leave fallback, a crash) is fine only if
-            // the pad still holds exactly the record this session expects.
-            if h.cfg == "ok" && h.crc.is_some() && h.crc == self.expected_crc {
-                self.boot = h.boot;
-            } else {
-                // Not this session's pad any more: let it go back to work.
-                if h.mode == "config" {
-                    let _ = self.client()?.exit();
-                }
-                self.client = None;
-                self.in_config = false;
-                self.path.clear();
-                bail!("the pad restarted with a different setup since Connect; connect again");
+        // The stored record must still be the one this session read or saved:
+        // edits made on the pad since then (saved by the pad itself) would
+        // otherwise be overwritten silently. A restart (the pad's leave
+        // fallback, a crash) is fine only on top of that.
+        let same_record = h.crc.is_some() && h.crc == self.expected_crc;
+        let changed = h.cfg == "ok" && !same_record;
+        let restarted = h.boot != self.boot;
+        if changed || (restarted && !(h.cfg == "ok" && same_record)) {
+            // Not this session's pad any more: let it go back to work.
+            if h.mode == "config" {
+                let _ = self.client()?.exit();
             }
+            self.client = None;
+            self.in_config = false;
+            self.path.clear();
+            bail!(
+                "the pad's saved setup changed since Connect (edited on the pad?); connect again to load it"
+            );
         }
+        self.boot = h.boot;
         self.recovery = h.mode == "recovery";
         self.in_config = true;
         Ok(())
@@ -549,8 +553,26 @@ mod tests {
         let Resp::Failed(m) = next(&w) else {
             panic!("not refused")
         };
-        assert!(m.contains("different setup"), "{m}");
+        assert!(m.contains("changed since Connect"), "{m}");
         assert_eq!(pad.lock().commits, 0);
         assert_eq!(pad.lock().mode, Mode::Normal, "the pad was let go");
+    }
+
+    #[test]
+    fn edits_saved_on_the_pad_after_connect_are_not_overwritten() {
+        let (pad, w, s) = setup();
+        {
+            // The pad saved an edit of its own; no restart.
+            let mut p = pad.lock();
+            let mut c = Config::decode(&p.stored).expect("decode");
+            c.selected = 1;
+            p.stored = c.encode().expect("encode");
+        }
+        w.send(Req::Save(s.record.clone()));
+        let Resp::Failed(m) = next(&w) else {
+            panic!("not refused")
+        };
+        assert!(m.contains("changed since Connect"), "{m}");
+        assert_eq!(pad.lock().commits, 0);
     }
 }

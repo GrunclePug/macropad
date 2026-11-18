@@ -117,6 +117,9 @@ void note_stored() {
   size_t n = store_read(rec);
   env.has_crc = n == CFG_SIZE && !config_validate(rec, n).code;
   env.stored_crc = env.has_crc ? config_crc(rec) : 0;
+  // A fresh pad's first save creates the record (pad-side saves only run on
+  // the "none" and "ok" boot rows).
+  if (env.has_crc && !strcmp(cfg_status, "none")) strcpy(cfg_status, "ok");
 }
 
 void enter_config(bool recovery, bool by_knock = false) {

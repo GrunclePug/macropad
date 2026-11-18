@@ -97,6 +97,11 @@ impl App {
                 Resp::Saved => {
                     self.error = None;
                     self.snapshot = Some(self.cfg.clone());
+                    // The pad restarted with this record: out of recovery.
+                    if let Some(s) = self.session.as_mut() {
+                        s.hello.mode = "config".into();
+                        s.hello.cfg = "ok".into();
+                    }
                     self.status = "Saved. The pad restarted with the new setup.".into();
                 }
                 Resp::Refused(e) => self.error = Some(format!("The pad refused this setup: {e}")),

@@ -171,7 +171,7 @@ Lines are tab-separated, end in `\n` (a trailing `\r` is ignored) and are at mos
 | `COMMIT` | validates, writes, reads back, `OK\t<crc>`, then restarts |
 | `EXIT` | `OK`, then back to normal mode (not in recovery) |
 
-Staging starts as the stored record (or the running setup if none validates; the default in recovery). `boot` is a random number picked at each boot, so a changed value proves a restart; `crc` is the stored record's.
+Staging starts as the stored record (or the running setup if none validates; the default in recovery); edits made on the pad and not yet saved are saved first. `boot` is a random number picked at each boot, so a changed value proves a restart. `crc` is the stored record's, kept current when the pad saves its own edits, and `cfg` changes from `none` to `ok` when the first save creates the record.
 
 **Self-test builds only:** `TESTCORRUPT` stores a record with a bad CRC and restarts; `TESTCRASH` aborts; `TESTDETACH` drops off USB for 1.5 s; `TESTRUN` leaves config mode and runs the self-test again.
 
@@ -181,3 +181,5 @@ Staging starts as the stored record (or the running setup if none validates; the
 2. `COMMIT`. An `ERR` ends the attempt with nothing saved.
 3. Close the port, then every 250 ms for up to 12 s look for the same USB serial number, open it, knock and `HELLO`.
 4. Success needs a changed `boot`, mode config, cfg `ok` and the crc of the record sent. Then `EXIT`.
+
+Before every Check or Save, the client also confirms the pad still holds the record it read or saved (by `crc`), so edits saved on the pad in the meantime are never overwritten; a restart in between is accepted only on that condition.
