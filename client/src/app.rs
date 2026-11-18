@@ -192,7 +192,10 @@ impl App {
         }
         match Config::decode(&s.record) {
             Ok(c) => {
-                self.cfg = self.carry_over(&c);
+                // Recovery or no stored record: the pad serves its compiled
+                // default, not a setup of its own.
+                let usable = s.hello.mode != "recovery" && s.hello.cfg != "none";
+                self.cfg = self.carry_over(&c, usable);
                 self.snapshot = Some(c);
                 self.snapshot_serial = self.connecting_serial.take();
                 self.error = None;
@@ -266,8 +269,10 @@ impl App {
 
     /// The editor's contents after Connect read `pad`: unsaved edits are
     /// rebased onto it when this is the same pad (by USB serial number)
-    /// they were made against; otherwise the pad's setup.
-    fn carry_over(&mut self, pad: &Config) -> Config {
+    /// they were made against; otherwise the pad's setup. A pad with no
+    /// usable stored setup (`usable` false) that this app read before keeps
+    /// the editor's contents, so a Save restores them.
+    fn carry_over(&mut self, pad: &Config, usable: bool) -> Config {
         let same_pad =
             self.snapshot_serial.is_some() && self.snapshot_serial == self.connecting_serial;
         // A Save whose outcome was unclear and which the pad now holds landed:
@@ -278,6 +283,13 @@ impl App {
         // Whatever the outcome, a fresh read settles every open Save.
         self.saving = None;
         self.unresolved.clear();
+        if same_pad && !usable && self.snapshot.is_some() {
+            self.notice = Some(
+                "The pad has no usable saved setup; the editor keeps yours. Save to restore it."
+                    .into(),
+            );
+            return self.cfg.clone();
+        }
         let unsaved = self.snapshot.as_ref().is_some_and(|old| *old != self.cfg);
         let Some(old) = self.snapshot.clone().filter(|_| same_pad && unsaved) else {
             if unsaved {
@@ -1145,6 +1157,52 @@ mod tests {
         a.connecting_serial = Some("B".into());
         a.on_connect(session);
         assert_eq!(a.cfg, other, "a different pad shows its own setup");
+    }
+
+    #[test]
+    fn a_pad_without_a_usable_setup_keeps_the_editor() {
+        let mut a = app();
+        let pad = builtin("pad").expect("pad");
+        let default = builtin("deck").expect("deck"); // stands in for the default
+        a.snapshot = Some(pad.clone());
+        a.cfg = pad.clone(); // no unsaved edits: the editor still holds X
+        let mut session = Session {
+            hello: crate::protocol::Hello {
+                fw: "0.3.0".into(),
+                mode: "recovery".into(),
+                cfg: "invalid 4".into(),
+                crc: None,
+                boot: 2,
+                sn: None,
+            },
+            pins: PIN_NAMES
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (u8::try_from(i).expect("16 pins"), (*n).to_string()))
+                .collect(),
+            tools: builtin_tools(),
+            record: default.encode().expect("encode"),
+        };
+        a.snapshot_serial = Some("A".into());
+        a.connecting_serial = Some("A".into());
+        a.on_connect(session.clone());
+        assert_eq!(a.cfg, pad, "recovery: the editor keeps the setup");
+        assert_eq!(a.snapshot.as_ref(), Some(&default), "Save would restore it");
+        assert!(a.notice.as_ref().expect("notice").contains("no usable"));
+
+        // The flash layer dropped the record: normal mode, nothing stored.
+        session.hello.mode = "config".into();
+        session.hello.cfg = "none".into();
+        a.cfg.release_ms = 9;
+        a.connecting_serial = Some("A".into());
+        a.on_connect(session.clone());
+        assert_eq!(a.cfg.release_ms, 9, "edits stay too");
+        assert_eq!(a.cfg.selected, pad.selected);
+
+        // Another pad in recovery shows its own setup.
+        a.connecting_serial = Some("B".into());
+        a.on_connect(session);
+        assert_eq!(a.cfg, default);
     }
 
     #[test]

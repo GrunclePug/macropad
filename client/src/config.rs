@@ -564,6 +564,13 @@ pub fn merge3(base: &[u8], mine: &[u8], theirs: &[u8]) -> Result<(Vec<u8>, Vec<u
                     }
                     o
                 }
+                (None, Some(ts)) => {
+                    // Both added a set under the same id: the editor's wins.
+                    if ts != *ms && !conflicts.contains(&COUNT) {
+                        conflicts.push(COUNT);
+                    }
+                    ms.clone()
+                }
                 _ => ms.clone(),
             })
             .collect()
@@ -945,6 +952,27 @@ mod tests {
         let ids: Vec<&str> = m.sets.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, ["osu", "stream"]);
         assert!(conflicts.contains(&67), "{conflicts:?}");
+    }
+
+    #[test]
+    fn merge3_names_two_different_sets_added_under_one_id() {
+        let base = vector("default.hex"); // osu, stream, media
+        let mut mine = Config::decode(&base).expect("decode");
+        let mut extra = mine.sets[0].clone();
+        extra.id = "set3".into();
+        mine.sets.push(extra.clone()); // the editor adds set3
+        let mut theirs = Config::decode(&base).expect("decode");
+        extra.flags ^= SET_LIVE;
+        theirs.sets.push(extra); // another app added a different set3
+        let (out, conflicts) = merge3(
+            &base,
+            &mine.encode().expect("e"),
+            &theirs.encode().expect("e"),
+        )
+        .expect("merge");
+        let m = Config::decode(&out).expect("decodes");
+        assert_eq!(m.sets[3], mine.sets[3], "the editor's set3 wins");
+        assert!(conflicts.contains(&67), "and that is named: {conflicts:?}");
     }
 
     #[test]

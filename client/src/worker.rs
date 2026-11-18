@@ -394,7 +394,7 @@ impl<P: Ports> State<P> {
         let unverified = h.cfg == "ok" && h.crc.is_none();
         let refuse = if unverified {
             Some(
-                "the pad can't read its stored setup back (a flash fault): unplug it and plug it back in, then",
+                "the pad can't read its stored setup back (a flash fault): unplug it, plug it back in and connect again",
             )
         } else if changed {
             Some("the pad's saved setup changed since Connect (edited on the pad?)")
@@ -412,6 +412,9 @@ impl<P: Ports> State<P> {
             self.in_config = false;
             self.path.clear();
             self.emit(Resp::Disconnected);
+            if unverified {
+                bail!("{why}");
+            }
             bail!("{why}; connect again to load it");
         }
         if let Some(c) = h.crc
