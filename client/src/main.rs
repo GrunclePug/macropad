@@ -143,7 +143,7 @@ fn wait(w: &Worker) -> Result<Resp> {
     loop {
         match w.rx.recv_timeout(Duration::from_secs(60))? {
             Resp::Progress(s) => eprintln!("{s}…"),
-            Resp::Disconnected | Resp::Landed(_) | Resp::Unresolved(_) => {} // the result follows
+            Resp::Disconnected | Resp::Landed(_) | Resp::Unresolved(_) | Resp::Settled => {} // the result follows
             Resp::Refused(e) => bail!("the pad refused it: {e}"),
             Resp::Failed(m) => bail!("{m}"),
             r => return Ok(r),

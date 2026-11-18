@@ -36,7 +36,7 @@ pub struct Pad {
     /// Report this crc in HELLO whatever is stored (a failed entry save:
     /// the staged edits' crc).
     pub report_crc: Option<u32>,
-    /// Refuse COMMIT (a failed flash write).
+    /// Refuse COMMIT definitively.
     pub fail_commit: bool,
     /// Refuse COMMIT with this code instead (106: E_VERIFY).
     pub fail_commit_code: Option<u8>,
@@ -181,7 +181,9 @@ impl Pad {
                     return self.reply("OK");
                 }
                 if self.fail_commit {
-                    return self.err(105, 0, "E_WRITE: flash write failed");
+                    // A definitive refusal (E_WRITE and E_VERIFY are
+                    // ambiguous: see fail_commit_code).
+                    return self.err(101, 0, "E_MODE: refused");
                 }
                 if let Some(code) = self.fail_commit_code {
                     // E_VERIFY whose second read doesn't confirm the record:

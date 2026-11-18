@@ -75,9 +75,11 @@ void crc_from_flash(const uint8_t* rec, size_t n) {
 
 uint8_t do_commit(const uint8_t* rec) {
   uint8_t r = store_write(rec);
-  if (r == E_VERIFY) {
+  if (r == E_VERIFY || r == E_WRITE) {
     // Read back once more: if flash does hold exactly this record, the save
-    // happened, and it ends the normal way (OK and a restart).
+    // happened, and it ends the normal way (OK and a restart). E_WRITE too:
+    // Preferences reports any NVS error as a failed write, including one
+    // after the new blob was already written.
     static uint8_t again[CFG_SIZE];
     size_t n = store_read(again);
     if (n == CFG_SIZE && !memcmp(again, rec, CFG_SIZE)) {

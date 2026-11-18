@@ -64,6 +64,8 @@ pub enum Resp {
     /// A Save reached COMMIT but its outcome stayed open: the pad may hold
     /// this record.
     Unresolved(Vec<u8>),
+    /// A restart showed that every open Save didn't land.
+    Settled,
     /// The pad rebooted with the new record and is back in normal mode.
     Saved,
     /// The pad refused the record; the editor keeps the edits.
@@ -416,7 +418,10 @@ impl<P: Ports> State<P> {
             // flash, and that's the record read at Connect, or still none.
             // (Settled only after a restart, conservatively: a lost COMMIT
             // reply leaves the pad up and the outcome unknown until then.)
-            self.attempted.clear();
+            if !self.attempted.is_empty() {
+                self.attempted.clear();
+                self.emit(Resp::Settled);
+            }
         }
         self.boot = h.boot;
         self.recovery = h.mode == "recovery";
@@ -463,11 +468,12 @@ impl<P: Ports> State<P> {
         self.emit(Resp::Progress("Saving".into()));
         match self.client()?.commit() {
             Ok(_) => {}
-            // A refusal is definitive, except E_VERIFY: the write happened
-            // and only its read-back differed, so the record may be there.
+            // A refusal is definitive, except E_WRITE and E_VERIFY: an NVS
+            // error can follow a write that happened, so the record may be
+            // there.
             Err(e)
                 if e.downcast_ref::<DeviceError>()
-                    .is_some_and(|d| d.code != 106) =>
+                    .is_some_and(|d| d.code != 105 && d.code != 106) =>
             {
                 self.attempted.pop(); // this one didn't land; earlier ones may have
                 return Err(e);
@@ -1027,5 +1033,34 @@ mod tests {
             panic!("Save had a target")
         };
         assert!(m.contains("not connected"), "{m}");
+    }
+
+    #[test]
+    fn an_e_write_is_kept_as_unresolved() {
+        let (pad, w, s) = setup();
+        let new = edited(&s.record);
+        pad.lock().fail_commit_code = Some(105);
+        w.send(Req::Save(new.clone()));
+        let Resp::Unresolved(rec) = next_raw(&w) else {
+            panic!("an E_WRITE was taken as definitive")
+        };
+        assert_eq!(rec, new);
+        assert!(matches!(next(&w), Resp::Refused(_)));
+    }
+
+    #[test]
+    fn a_restart_that_settles_open_saves_tells_the_gui() {
+        let (pad, w, s) = setup();
+        pad.lock().fail_commit_code = Some(106); // open, and it didn't land
+        w.send(Req::Save(edited(&s.record)));
+        assert!(matches!(next(&w), Resp::Refused(_)));
+        {
+            let mut p = pad.lock();
+            p.fail_commit_code = None;
+            p.restart(); // boots on the old record
+        }
+        w.send(Req::Check(s.record.clone()));
+        assert!(matches!(next(&w), Resp::Settled));
+        assert!(matches!(next(&w), Resp::Checked));
     }
 }

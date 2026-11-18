@@ -153,6 +153,11 @@ impl App {
                 }
                 return;
             }
+            Resp::Settled => {
+                // A restart showed the open Saves didn't land.
+                self.unresolved.clear();
+                return;
+            }
             Resp::Refused(e) => {
                 self.saving = None;
                 self.error = Some(format!("The pad refused this setup: {e}"));
@@ -1376,5 +1381,16 @@ mod tests {
             "{n}"
         );
         assert!(!n.contains("Save would replace"), "{n}");
+    }
+
+    #[test]
+    fn a_settled_save_is_no_longer_a_candidate() {
+        let mut a = app();
+        let base = a.cfg.clone();
+        let mut b = base.clone();
+        b.release_ms = 9;
+        a.handle(Resp::Unresolved(b.encode().expect("encode")));
+        a.handle(Resp::Settled);
+        assert!(a.unresolved.is_empty());
     }
 }
