@@ -2,12 +2,19 @@
 
 #include <Arduino.h>
 #include <Preferences.h>
+#include <nvs.h>
 
 namespace mp {
 namespace {
 
 constexpr uint32_t IDLE_MS = 1000;
 constexpr uint32_t RETRY_MS = 5000;
+
+#ifdef MACROPAD_SELFTEST
+const char* const NS = "macropad-test";
+#else
+const char* const NS = "macropad";
+#endif
 
 Preferences prefs;
 bool open_ = false;
@@ -23,22 +30,33 @@ const char* const OLD_KEYS[] = {"click.min", "click.max", "click.btn", "jitter.d
 
 }  // namespace
 
-void store_begin() {
-#ifdef MACROPAD_SELFTEST
-  open_ = prefs.begin("macropad-test", false);
-#else
-  open_ = prefs.begin("macropad", false);
-#endif
+void store_begin() { open_ = prefs.begin(NS, false); }
+
+// The record's length straight from NVS: 0 only when there is no record.
+// Preferences reports any lookup error as "no key", which would let a save
+// replace a record that is there but can't be read; here an error reads as
+// unreadable (SIZE_MAX).
+size_t stored_length() {
+  nvs_handle_t h;
+  esp_err_t e = nvs_open(NS, NVS_READONLY, &h);
+  if (e == ESP_ERR_NVS_NOT_FOUND) return 0;
+  if (e != ESP_OK) return SIZE_MAX;
+  size_t n = 0;
+  e = nvs_get_blob(h, "cfg", nullptr, &n);
+  nvs_close(h);
+  if (e == ESP_ERR_NVS_NOT_FOUND) return 0;
+  return e == ESP_OK && n ? n : SIZE_MAX;
 }
 
 size_t store_read(uint8_t* buf) {
-  if (!open_ || !prefs.isKey("cfg")) return 0;
-  size_t n = prefs.getBytesLength("cfg");
-  if (n > CFG_SIZE || n == 0) {
-    // Too long (or unreadable length): invalid, never "absent", which would
-    // allow a save over it. The zeroed buffer fails validation.
+  if (!open_) return 0;
+  size_t n = stored_length();
+  if (n == 0) return 0;
+  if (n > CFG_SIZE) {
+    // Too long, or its length can't be read: invalid, never "absent", which
+    // would allow a save over it. The zeroed buffer fails validation.
     memset(buf, 0, CFG_SIZE);
-    return n ? n : 1;
+    return n == SIZE_MAX ? 1 : n;
   }
   if (prefs.getBytes("cfg", buf, n) != n) {
     // The record is there but couldn't be read: invalid (recovery), not

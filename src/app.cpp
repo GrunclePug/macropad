@@ -71,6 +71,14 @@ void crc_from_flash(const uint8_t* rec, size_t n) {
   env.has_crc = n == CFG_SIZE && !config_validate(rec, n).code;
   env.stored_crc = env.has_crc ? config_crc(rec) : 0;
   if (env.has_crc && !strcmp(cfg_status, "none")) strcpy(cfg_status, "ok");
+  if (n && !env.has_crc) {
+    // Something is stored but can't be read back: `cfg ok` with `crc none`
+    // (whatever the boot row), which the client refuses to write over, and
+    // no pad-side saves until a restart sorts it out.
+    strcpy(cfg_status, "ok");
+    boot.persist = false;
+    core.set_unsaved(true);
+  }
 }
 
 uint8_t do_commit(const uint8_t* rec) {

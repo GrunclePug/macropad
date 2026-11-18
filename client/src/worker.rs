@@ -542,8 +542,8 @@ impl<P: Ports> State<P> {
                         if on_connect_record || still_nothing {
                             // Restarted on the record read at Connect: no
                             // open Save landed, this one or any earlier one.
-                            let c = stored_crc(rec);
-                            let earlier = self.attempted.iter().any(|(a, _)| *a != c);
+                            // Any earlier attempt, the same draft retried too.
+                            let earlier = self.attempted.len() > 1;
                             self.attempted.clear();
                             if earlier {
                                 self.emit(Resp::Settled);
@@ -1130,6 +1130,29 @@ mod tests {
         );
         let Resp::Failed(m) = next_raw(&w) else {
             panic!("expected a plain failure, no Unresolved")
+        };
+        assert!(m.contains("without the new setup"), "{m}");
+    }
+
+    #[test]
+    fn retrying_the_same_draft_settles_it_too() {
+        let (pad, w, s) = setup();
+        let draft = edited(&s.record);
+        pad.lock().fail_commit_code = Some(105); // open, the old record kept
+        w.send(Req::Save(draft.clone()));
+        assert!(matches!(next(&w), Resp::Refused(_)));
+        {
+            let mut p = pad.lock();
+            p.fail_commit_code = None;
+            p.lose_commit = true; // the retry restarts on the old record
+        }
+        w.send(Req::Save(draft));
+        assert!(
+            matches!(next_raw(&w), Resp::Settled),
+            "the first attempt of the same draft is settled"
+        );
+        let Resp::Failed(m) = next_raw(&w) else {
+            panic!("expected a plain failure")
         };
         assert!(m.contains("without the new setup"), "{m}");
     }
