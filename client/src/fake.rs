@@ -42,7 +42,8 @@ pub struct Pad {
     pub lose_commit: bool,
     /// Report `crc none` while `cfg ok` (a flash read that failed).
     pub hide_crc: bool,
-    /// Refuse COMMIT with this code instead (106: E_VERIFY).
+    /// Refuse COMMIT with this code instead (105 E_WRITE or 106 E_VERIFY,
+    /// both after a second read that didn't confirm the record).
     pub fail_commit_code: Option<u8>,
     /// The USB serial number HELLO reports.
     pub sn: String,
@@ -195,7 +196,7 @@ impl Pad {
                     return self.err(101, 0, "E_MODE: refused");
                 }
                 if let Some(code) = self.fail_commit_code {
-                    // E_VERIFY whose second read doesn't confirm the record:
+                    // E_WRITE or E_VERIFY whose second read doesn't confirm the record:
                     // flash keeps the old one (the firmware turns a
                     // confirmed second read into an ordinary save).
                     return self.err(code, 0, "E_VERIFY: read-back differs");

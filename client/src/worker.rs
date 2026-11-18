@@ -144,7 +144,7 @@ struct State<P: Ports> {
     /// holds exactly this.
     expected_crc: Option<u32>,
     /// Saves whose outcome is still open (crc, record): a reboot check that
-    /// timed out or an E_VERIFY may still have landed. Every one is kept, so
+    /// timed out, an E_WRITE or an E_VERIFY may still have landed. Every one is kept, so
     /// a later retry can't hide an earlier one that did land.
     attempted: Vec<(u32, Vec<u8>)>,
     /// `cfg` at Connect: a pad with no stored record that restarted is the
