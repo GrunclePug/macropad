@@ -389,7 +389,9 @@ impl<P: Ports> State<P> {
         // A stored record this session knew, now reported without a crc
         // (its flash read failed or came back invalid): unverified, so no
         // write on top of it.
-        let unverified = h.cfg == "ok" && h.crc.is_none() && self.expected_crc.is_some();
+        // (Nothing legitimate reports `cfg ok` without a crc: a fresh pad is
+        // `cfg none`, recovery is `invalid N`; so this holds across reconnects.)
+        let unverified = h.cfg == "ok" && h.crc.is_none();
         let refuse = if unverified {
             Some("the pad can't confirm its stored setup right now")
         } else if changed {
@@ -527,10 +529,14 @@ impl<P: Ports> State<P> {
                             let _ = c.exit();
                         }
                         if h.cfg == "ok" && h.crc.is_some() && h.crc == self.expected_crc {
-                            // Restarted on the record read at Connect: this
-                            // Save conclusively didn't land.
+                            // Restarted on the record read at Connect: no
+                            // open Save landed, this one or any earlier one.
                             let c = stored_crc(rec);
-                            self.attempted.retain(|(a, _)| *a != c);
+                            let earlier = self.attempted.iter().any(|(a, _)| *a != c);
+                            self.attempted.clear();
+                            if earlier {
+                                self.emit(Resp::Settled);
+                            }
                             self.boot = h.boot;
                             self.path = path;
                             bail!(
@@ -1097,11 +1103,38 @@ mod tests {
     #[test]
     fn a_restart_on_the_old_record_settles_the_save() {
         let (pad, w, s) = setup();
-        pad.lock().lose_commit = true; // OK, restart, but the record didn't stick
+        // An earlier Save left open (E_WRITE, the old record still in flash).
+        pad.lock().fail_commit_code = Some(105);
         w.send(Req::Save(edited(&s.record)));
+        assert!(matches!(next(&w), Resp::Refused(_)));
+        pad.lock().fail_commit_code = None;
+        // This Save: OK, restart, but the record didn't stick.
+        pad.lock().lose_commit = true;
+        let mut c = Config::decode(&s.record).expect("decode");
+        c.release_ms = 17;
+        w.send(Req::Save(c.encode().expect("encode")));
+        assert!(
+            matches!(next_raw(&w), Resp::Settled),
+            "the earlier one is settled too"
+        );
         let Resp::Failed(m) = next_raw(&w) else {
-            panic!("expected a plain failure, no Unresolved first")
+            panic!("expected a plain failure, no Unresolved")
         };
         assert!(m.contains("without the new setup"), "{m}");
+    }
+
+    #[test]
+    fn an_unverified_setup_is_refused_across_a_reconnect() {
+        let rec = builtin("pad").expect("pad").encode().expect("encode");
+        let pad = FakePad::new(rec.clone());
+        pad.lock().hide_crc = true; // cfg ok, crc none from the start
+        let (w, s) = connect_to(&pad);
+        w.send(Req::Save(edited(&s.record)));
+        assert!(matches!(next(&w), Resp::Disconnected));
+        let Resp::Failed(m) = next(&w) else {
+            panic!("wrote over an unverified setup")
+        };
+        assert!(m.contains("can't confirm"), "{m}");
+        assert_eq!(pad.lock().commits, 0);
     }
 }

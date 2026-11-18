@@ -199,7 +199,12 @@ impl Pad {
                     // E_WRITE or E_VERIFY whose second read doesn't confirm the record:
                     // flash keeps the old one (the firmware turns a
                     // confirmed second read into an ordinary save).
-                    return self.err(code, 0, "E_VERIFY: read-back differs");
+                    let name = if code == 105 {
+                        "E_WRITE: write failed"
+                    } else {
+                        "E_VERIFY: read-back differs"
+                    };
+                    return self.err(code, 0, name);
                 }
                 if !self.lose_commit {
                     self.stored = self.staging.clone();
