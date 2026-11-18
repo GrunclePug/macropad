@@ -67,18 +67,22 @@ void stage_default() {
 // HELLO's crc from what flash holds now, read back (after an E_WRITE or
 // E_VERIFY the write may have happened, so RAM can't be trusted).
 // `rec`/`n`: the record just read back from flash.
+// Flash no longer holds what it should (unreadable, or a verified record
+// gone): `cfg ok` with `crc none` (whatever the boot row), which the client
+// refuses to write over, and no pad-side saves until a restart sorts it out.
+void flash_fault() {
+  env.has_crc = false;
+  env.stored_crc = 0;
+  strcpy(cfg_status, "ok");
+  boot.persist = false;
+  core.set_unsaved(true);
+}
+
 void crc_from_flash(const uint8_t* rec, size_t n) {
   env.has_crc = n == CFG_SIZE && !config_validate(rec, n).code;
   env.stored_crc = env.has_crc ? config_crc(rec) : 0;
   if (env.has_crc && !strcmp(cfg_status, "none")) strcpy(cfg_status, "ok");
-  if (n && !env.has_crc) {
-    // Something is stored but can't be read back: `cfg ok` with `crc none`
-    // (whatever the boot row), which the client refuses to write over, and
-    // no pad-side saves until a restart sorts it out.
-    strcpy(cfg_status, "ok");
-    boot.persist = false;
-    core.set_unsaved(true);
-  }
+  if (n && !env.has_crc) flash_fault();  // something stored, unreadable
 }
 
 uint8_t do_commit(const uint8_t* rec) {
@@ -181,10 +185,24 @@ void enter_config(bool recovery, bool by_knock = false) {
       core.clean();
       note_stored();
     } else {
-      // HELLO reports the staged record's crc, so a client that read the
-      // old stored record is refused rather than overwriting the edits.
-      env.has_crc = true;
-      env.stored_crc = config_crc(env.staging);
+      // Read back, as after a failed commit: the write may have landed.
+      static uint8_t back[CFG_SIZE];
+      size_t m = store_read(back);
+      if (m == CFG_SIZE && !memcmp(back, env.staging, CFG_SIZE)) {
+        flushed = true;
+        core.clean();
+        env.has_crc = true;
+        env.stored_crc = config_crc(back);
+        if (!strcmp(cfg_status, "none")) strcpy(cfg_status, "ok");
+      } else if (m && (m != CFG_SIZE || config_validate(back, m).code)) {
+        flash_fault();  // staging stays the running config
+      } else {
+        // The old record or none: HELLO reports the staged record's crc, so
+        // a client that read the old stored record is refused rather than
+        // overwriting the edits.
+        env.has_crc = true;
+        env.stored_crc = config_crc(env.staging);
+      }
     }
   }
   // Staging: the stored blob if it validates, otherwise the running config
@@ -194,8 +212,9 @@ void enter_config(bool recovery, bool by_knock = false) {
     stage_default();
   else if (n != CFG_SIZE || config_validate(env.staging, n).code) {
     // A record that validated before (at boot, or at a save) and now can't
-    // be read back: the same flash fault as after a failed commit.
-    if (n && env.has_crc) crc_from_flash(env.staging, n);
+    // be read back, or is gone: the same flash fault as after a failed
+    // commit.
+    if (env.has_crc) flash_fault();
     config_encode(cfg, env.staging);
   } else {
     // Staging is the stored record: HELLO reports exactly its crc, so what

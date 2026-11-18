@@ -190,15 +190,25 @@ impl App {
             self.worker.send(Req::Disconnect);
             return;
         }
+        let unverified = s.hello.cfg == "ok" && s.hello.crc.is_none();
         let kept_editor = match Config::decode(&s.record) {
             Ok(c) => {
                 // A crc means GET served a stored, validated record (or the
                 // pad's staged edits). Without one (recovery, nothing
                 // stored, unreadable, or a safe or crash boot on any of
-                // those) the pad serves its compiled default.
+                // those) GET serves the compiled default or the running
+                // setup, not a stored one.
                 let usable = s.hello.crc.is_some();
                 let (cfg, kept) = self.carry_over(&c, usable);
                 self.cfg = cfg;
+                if unverified {
+                    // Save is refused until a restart: say that, not "Save".
+                    self.notice = Some(
+                        "The pad can't read its stored setup back (a flash fault). Unplug it, \
+                         plug it back in and connect again; the editor keeps your setup."
+                            .into(),
+                    );
+                }
                 self.snapshot = Some(c);
                 self.snapshot_serial = self.connecting_serial.take();
                 self.error = None;
@@ -223,6 +233,9 @@ impl App {
                 "Recovery: the pad's saved setup is unusable ({}). {next}.",
                 s.hello.cfg
             )
+        } else if unverified {
+            "Connected, but the pad can't read its stored setup back: replug it before saving."
+                .into()
         } else {
             format!(
                 "Connected to firmware {}. The pad's keys are paused while this app is connected.",
@@ -289,9 +302,11 @@ impl App {
         if same_pad && (self.saving.as_ref() == Some(pad) || self.unresolved.contains(pad)) {
             self.snapshot = Some(pad.clone());
         }
-        // Whatever the outcome, a fresh read settles every open Save.
+        // Whatever the outcome, a fresh read settles every open Save, and an
+        // earlier connection's notice no longer applies.
         self.saving = None;
         self.unresolved.clear();
+        self.notice = None;
         if same_pad && !usable && self.snapshot.is_some() {
             if self.cfg != *pad {
                 self.notice = Some(
@@ -1204,6 +1219,8 @@ mod tests {
         // The flash layer dropped the record: normal mode, nothing stored.
         session.hello.mode = "config".into();
         session.hello.cfg = "none".into();
+        a.snapshot = Some(pad.clone());
+        a.cfg = pad.clone();
         a.cfg.release_ms = 9;
         a.connecting_serial = Some("A".into());
         a.on_connect(session.clone());
@@ -1212,10 +1229,25 @@ mod tests {
 
         // A crash reset on a pad with nothing readable: the default again.
         session.hello.cfg = "default crash".into();
+        a.snapshot = Some(pad.clone()); // read from this pad before it lost X
         a.cfg = pad.clone();
         a.connecting_serial = Some("A".into());
         a.on_connect(session.clone());
         assert_eq!(a.cfg, pad, "a crash or safe boot keeps the editor too");
+        assert!(a.notice.as_ref().expect("notice").contains("no usable"));
+
+        // Unreadable at config entry (`cfg ok`, no crc): the editor is kept,
+        // and the app says to replug, not to Save (which is refused).
+        session.hello.cfg = "ok".into();
+        a.snapshot = Some(pad.clone());
+        a.cfg = pad.clone();
+        a.connecting_serial = Some("A".into());
+        a.on_connect(session.clone());
+        assert_eq!(a.cfg, pad);
+        let n = a.notice.clone().expect("notice");
+        assert!(n.contains("Unplug") && !n.contains("Save"), "{n}");
+        assert!(a.status.contains("replug"), "{}", a.status);
+        session.hello.cfg = "default crash".into();
 
         // Another pad in recovery shows its own setup.
         a.connecting_serial = Some("B".into());

@@ -88,7 +88,7 @@ Run `macropad-config` and press Connect. The app asks the pad to switch to confi
 ```sh
 macropad-config                     # the editor
 macropad-config ports               # serial ports, Nano ESP32s first
-macropad-config pull pad.toml       # save the pad's setup to a file
+macropad-config pull pad.toml       # save the pad's stored setup to a file (refused if it has none)
 macropad-config push pad.toml       # check it on the pad and save it there
 macropad-config --fake              # try the editor with a pretend pad
 ```

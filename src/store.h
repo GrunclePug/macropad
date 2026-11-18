@@ -13,7 +13,10 @@ namespace mp {
 void store_begin();
 // Read the stored blob into buf (CFG_SIZE bytes). Returns its length, 0 if
 // there is none.
-size_t store_read(uint8_t* buf);  // buf holds CFG_SIZE; returns the stored length (0: none)
+// buf holds CFG_SIZE; returns the stored length, 0 only when there is none.
+// A record that is there but can't be read returns nonzero with buf zeroed,
+// so it fails validation (never reads as absent).
+size_t store_read(uint8_t* buf);
 // Write an encoded record, read it back and compare. Returns E_OK, E_WRITE
 // or E_VERIFY.
 uint8_t store_write(const uint8_t* rec);

@@ -166,6 +166,14 @@ fn connect(port: Option<&str>) -> Result<(Worker, worker::Session)> {
 
 fn pull(file: &std::path::Path, port: Option<&str>) -> Result<()> {
     let (_w, s) = connect(port)?;
+    // No crc: GET serves a fallback (the default or the running setup), not
+    // a stored record. Don't let it replace a good backup.
+    if s.hello.crc.is_none() {
+        bail!(
+            "the pad has no stored setup it can read back (cfg {}); nothing written",
+            s.hello.cfg
+        );
+    }
     let c = Config::decode(&s.record).context("the pad's setup")?;
     preset::write_file(file, &Preset::from_config(&c).to_toml()?)?;
     eprintln!("wrote {}", file.display());
