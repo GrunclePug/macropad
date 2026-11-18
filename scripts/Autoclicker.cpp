@@ -23,7 +23,7 @@ extern int buttonStates[];
 extern const int NORMAL_DEBOUNCE_TIME;
 
 // --- CONSTANT ---
-const int AUTOCLICKER_DELAY_STEP_SIZE = 1;
+const int AUTOCLICKER_DELAY_STEP_SIZE = 10;
 
 // --- HELPER ---
 static void handleInactiveState(AutoclickerData* data, Script* thisScript, unsigned long currentTime);
@@ -45,7 +45,7 @@ void autoclicker(Script* thisScript) {
   // Cast the void* data pointer back to our specific data struct.
   AutoclickerData* data = static_cast<AutoclickerData*>(thisScript->data);
   if (!data) return; // Exit if data is not initialized.
-  
+
   unsigned long currentTime = millis();
 
   if (killswitch || !thisScript->enabled) {
@@ -53,7 +53,7 @@ void autoclicker(Script* thisScript) {
   } else {
     handleActiveState(data, thisScript, currentTime);
   }
-  
+
   updateScriptDisplay(data, thisScript);
 }
 

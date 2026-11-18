@@ -6,6 +6,7 @@
 // Scripts
 #include "scripts/Gamepad.cpp"
 #include "scripts/Autoclicker.cpp"
+#include "scripts/Keyclicker.cpp"
 #include "scripts/Jitter.cpp"
 #include "scripts/MouseHold.cpp"
 

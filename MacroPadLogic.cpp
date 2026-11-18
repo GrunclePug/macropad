@@ -18,6 +18,7 @@ int buttonStates[4];
 Script scripts[] = { // ScriptSetup, ScriptFunction, name, selected, enabled, data, msg
   {setupGamepad, gamepad, "Gamepad", false, false, nullptr},
   {setupAutoclicker, autoclicker, "Autoclicker", false, false, nullptr},
+  {setupKeyclicker, keyclicker, "Keyclicker", false, false, nullptr},
   {setupJitter, jitter, "Jitter", false, false, nullptr},
   {setupMouseHold, mouseHold, "Mouse Hold", false, false, nullptr}
 };
