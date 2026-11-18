@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "app.h"
+#include "cdc.h"
 #include "display.h"
 #include "pins.h"
 #include "tools/tools.h"
@@ -94,23 +95,24 @@ int tool_index(const char* id) {
 }
 
 void report() {
-  Serial.println("=== selftest results ===");
+  text_printf("%s", "=== selftest results ===");
   int fails = 0;
   for (uint8_t i = 0; i < nchecks; i++) {
-    Serial.printf("%s %s\n", checks[i].pass ? "PASS" : "FAIL", checks[i].name);
+    text_printf("%s %s\n", checks[i].pass ? "PASS" : "FAIL", checks[i].name);
     fails += !checks[i].pass;
   }
   if (nlat)
-    Serial.printf("latency_us n=%d min=%lu p50=%lu p99=%lu max=%lu\n", nlat, (unsigned long)lat[0],
+    text_printf("latency_us n=%d min=%lu p50=%lu p99=%lu max=%lu\n", nlat, (unsigned long)lat[0],
                   (unsigned long)lat[nlat / 2], (unsigned long)p99(), (unsigned long)lat[nlat - 1]);
-  Serial.printf("chords ok=%d split=%d\n", chord_ok, chord_split);
-  Serial.printf("kb_reports=%lu mods_seen=%lu f17_reports=%lu\n", (unsigned long)kb_reports,
+  text_printf("chords ok=%d split=%d\n", chord_ok, chord_split);
+  text_printf("kb_reports=%lu mods_seen=%lu f17_reports=%lu\n", (unsigned long)kb_reports,
                 (unsigned long)mods_seen, (unsigned long)f17_reports);
-  Serial.printf("loop max_gap_us=%lu gaps_over_2ms=%lu loops=%lu\n", (unsigned long)stats.max_gap_us,
+  text_printf("loop max_gap_us=%lu gaps_over_2ms=%lu loops=%lu\n", (unsigned long)stats.max_gap_us,
                 (unsigned long)stats.gaps_over_2ms, (unsigned long)stats.loops);
-  Serial.printf("input_dropped=%lu hid_overflows=%lu display_online=%d\n",
+  text_printf("tx_stalls_during_trials=%lu\n", (unsigned long)cdc_link().stalls());
+  text_printf("input_dropped=%lu hid_overflows=%lu display_online=%d\n",
                 (unsigned long)input.dropped(), (unsigned long)hid.overflows(), display_online());
-  Serial.printf("=== %d checks, %d failed ===\n", nchecks, fails);
+  text_printf("=== %d checks, %d failed ===\n", nchecks, fails);
 }
 
 }  // namespace
@@ -129,7 +131,7 @@ void selftest_step(uint32_t now) {
     case 0:
       if (!usb_up()) return;
       WAIT(3000);
-      Serial.println("selftest: start");
+      text_printf("%s", "selftest: start");
       click = tool_index("click");
       jit = tool_index("jitter");
       spam = tool_index("spam");
@@ -182,7 +184,7 @@ void selftest_step(uint32_t now) {
       PRESS(K[3]);
       WAIT(150);
       check("live keys: 2 and 4 shown as held", core.held_keys() == 0b1010);
-      Serial.println("--- osu frame, keys 2 and 4 held ---");
+      text_printf("%s", "--- osu frame, keys 2 and 4 held ---");
       display_dump();
       LIFT(K[1]);
       LIFT(K[3]);
@@ -190,9 +192,16 @@ void selftest_step(uint32_t now) {
 
       // --- Latency and chords on osu (live keys: redraws on every press),
       // with jitter and autoclicker running ---
+      // Let the self-test's own output drain first: in real use nothing is sent
+      // over serial while keys are played (up to 20 s if a host is reading).
+      for (i = 0; i < 2000 && cdc_link().connected() && (!text_idle() || cdc_link().reply_pending()); i++) {
+        WAIT(10);
+      }
       WAIT(500);
       stats.max_gap_us = stats.gaps_over_2ms = stats.loops = 0;
       stats.measuring = true;
+      cdc_link().reset_stalls();
+      cdc_link().count_stalls(true);
       for (i = 0; i < TRIALS; i++) {
         stats.force_redraw = true;
         lat_usage = VARIANT.keymaps[0].keys[i % 4].usage;
@@ -213,6 +222,7 @@ void selftest_step(uint32_t now) {
         WAIT(40);
       }
       stats.measuring = false;
+      cdc_link().count_stalls(false);
       sort_latency();
       check("every osu press reached a report", nlat == TRIALS);
       check("latency p99 <= 1 ms (pin to report accepted)", nlat && p99() <= 1000);
@@ -319,9 +329,11 @@ void selftest_step(uint32_t now) {
 
       // --- USB loss: soft disconnect, then reconnect ---
       check("mouse hold running before USB loss", core.active(hold));
+#ifndef MACROPAD_SELFTEST_NODETACH
       usb_detach(true);
       WAIT(1500);
       usb_detach(false);
+#endif
       for (i = 0; i < 100 && !usb_up(); i++) {
         WAIT(100);
       }
@@ -343,12 +355,12 @@ void selftest_step(uint32_t now) {
       display_service(core, now, true);
       // The serial port went away with the USB test: wait for the host to
       // reopen it, so the one-time frame dump isn't lost.
-      for (i = 0; i < 600 && !Serial; i++) {
+      for (i = 0; i < 600 && !cdc_link().connected(); i++) {
         WAIT(100);
       }
       WAIT(500);
       report();
-      Serial.println("--- last frame (for a human to look at) ---");
+      text_printf("%s", "--- last frame (for a human to look at) ---");
       display_dump();
       for (;;) {
         WAIT(5000);

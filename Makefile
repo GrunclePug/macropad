@@ -26,7 +26,7 @@ CLI     := arduino-cli compile --warnings all --build-path $(BUILD) \
            --build-property "compiler.cpp.extra_flags=$(DEFINES)"
 
 TEST_SRC := $(wildcard test/*.cpp) src/input.cpp src/hid.cpp src/core.cpp \
-            src/tools/tools.cpp src/settings_key.cpp
+            src/tools/tools.cpp src/settings_key.cpp src/link.cpp
 
 .PHONY: build upload test clean
 

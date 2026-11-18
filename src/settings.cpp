@@ -3,6 +3,8 @@
 #include <Arduino.h>
 #include <Preferences.h>
 
+#include "cdc.h"
+
 namespace mp {
 namespace {
 
@@ -24,7 +26,7 @@ void settings_begin(Core& c) {
   open_ = prefs.begin("macropad", false);
 #endif
   if (!open_) {
-    Serial.println("settings: NVS unavailable, using defaults");
+    cdc_link().log("settings: NVS unavailable, using defaults");
     return;
   }
   char key[16];

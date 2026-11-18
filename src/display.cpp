@@ -5,6 +5,8 @@
 #include <Arduino.h>
 #include <Wire.h>
 
+#include "cdc.h"
+
 namespace mp {
 namespace {
 
@@ -273,7 +275,7 @@ void display_dump() {
     char line[W + 1];
     for (int x = 0; x < W; x++) line[x] = (b[y * (W / 8) + x / 8] & (0x80 >> (x & 7))) ? '#' : '.';
     line[W] = 0;
-    Serial.println(line);
+    text_printf("%s", line);
   }
 }
 

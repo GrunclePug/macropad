@@ -96,6 +96,8 @@ class Arbiter {
 
   bool mouse_idle() const { return mq_.count == 0; }
   bool keyboard_idle() const { return kq_count_ == 0; }
+  // Nothing queued or pending in any report.
+  bool idle() const { return !neutral_pending_ && !kq_count_ && !cq_.count && !mq_.count && !dx_ && !dy_ && !dw_; }
   const Keys& sent_keys() const { return sent_keys_; }
   uint8_t sent_buttons() const { return sent_buttons_; }
   uint8_t sent_consumer() const { return sent_consumer_; }

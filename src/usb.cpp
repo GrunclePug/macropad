@@ -4,7 +4,10 @@
 
 #include "USB.h"
 #include "USBHID.h"
+#include "soc/usb_struct.h"
 #include "tusb.h"
+
+#include "cdc.h"
 
 namespace mp {
 namespace {
@@ -72,10 +75,18 @@ void on_usb(void*, esp_event_base_t base, int32_t id, void*) {
   }
 }
 
+uint32_t last_hid_us = 0;
+
 struct Port : UsbPort {
-  bool ready() override { return tud_hid_n_ready(0); }
+  bool ready() override {
+    // Never gated on usb_in_idle(): a CDC packet the host never reads can keep
+    // a mask bit set indefinitely, and keys must never wait on serial.
+    return tud_hid_n_ready(0) && !cdc_tx_holds_hid(micros());
+  }
   bool submit(uint8_t id, const uint8_t* data, uint8_t len) override {
-    return tud_hid_n_report(0, id, data, len);
+    if (!tud_hid_n_report(0, id, data, len)) return false;
+    last_hid_us = micros();
+    return true;
   }
 };
 Port port;
@@ -92,6 +103,10 @@ bool usb_up() { return tud_mounted() && !tud_suspended(); }
 bool usb_take_disturbed() { return __atomic_exchange_n(&disturbed, false, __ATOMIC_SEQ_CST); }
 
 UsbPort& usb_port() { return port; }
+
+bool usb_in_idle() { return USB0.dtknqr4_fifoemptymsk == 0; }
+
+uint32_t usb_last_hid_us() { return last_hid_us; }
 
 void usb_detach(bool detach) {
   if (detach)
