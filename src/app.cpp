@@ -30,7 +30,7 @@ void app_setup() {
   pins_begin();
   rng.seed(esp_random());
   core.begin(VARIANT, input, hid, rng);
-  settings_begin(VARIANT);
+  settings_begin(core);
   display_begin();
   usb_begin();
   enableLoopWDT();

@@ -21,6 +21,7 @@ GFXcanvas1* canvas = nullptr;
 QueueHandle_t queue = nullptr;
 volatile bool online = false;
 uint32_t drawn_version = 0;
+uint8_t drawn_held = 0;
 uint32_t drawn_at = 0;
 bool drawn_banner = false;
 
@@ -181,8 +182,25 @@ void render(const Core& c, uint32_t now) {
   }
 
   const Keymap& km = v.keymaps[e.index];
+  if (!km.legend && c.live(e.index)) {
+    // Live keys: [#] for each key being sent, rows of four, label underneath.
+    uint8_t held = c.held_keys();
+    for (uint8_t k = 0; k < v.keys; k++) {
+      int col = k % 4, row = k / 4;
+      int x = (W - 4 * 24) / 2 + col * 24 + 3, yy = 22 + row * 20;
+      g.setCursor(x, yy);
+      g.print(held & (1u << k) ? "[#]" : "[ ]");
+      g.setCursor(x + 6, yy + 9);
+      g.print(text(km.keys[k].label));
+    }
+    if (v.keys <= 4) {
+      g.setCursor(0, H - 8);
+      g.print("Live keys");
+    }
+    return;
+  }
   if (!km.legend) {
-    // Static screen: nothing here changes while keys are played.
+    // Low latency: a static screen, nothing redraws while keys are played.
     g.setTextSize(2);
     y = 28;
     int x = (W - 4 * 24) / 2;
@@ -190,6 +208,9 @@ void render(const Core& c, uint32_t now) {
       g.setCursor(x, y);
       g.print(text(km.keys[k].label));
     }
+    g.setTextSize(1);
+    g.setCursor(0, H - 8);
+    g.print("Low latency");
     return;
   }
   for (uint8_t k = 0; k < v.keys; k++) {
@@ -218,11 +239,17 @@ void display_begin() {
 
 void display_service(const Core& c, uint32_t now, bool force) {
   bool banner = c.banner(now) != nullptr;
-  if (!force && c.version() == drawn_version && banner == drawn_banner) return;
+  // Key presses only redraw on a keymap with live keys shown.
+  const Variant& v = c.variant();
+  const Entry& e = v.entries[c.shown()];
+  bool live = c.keymap_live() && !v.keymaps[e.index].legend && c.live(e.index);
+  uint8_t held = live ? c.held_keys() : 0;
+  if (!force && c.version() == drawn_version && banner == drawn_banner && held == drawn_held) return;
   if (!force && now - drawn_at < FRAME_MS) return;
   render(c, now);
   drawn_version = c.version();
   drawn_banner = banner;
+  drawn_held = held;
   drawn_at = now;
   static Frame f;
   memcpy(f.buf, canvas->getBuffer(), sizeof f.buf);

@@ -53,6 +53,12 @@ class Core {
   uint16_t dirty(uint8_t tool) const { return dirty_[tool]; }
   void clean(uint8_t tool, uint16_t bits) { dirty_[tool] &= ~bits; }
   bool any_dirty() const;
+  // Keymaps without a legend (osu) have a "live keys" option: show which keys
+  // are down, or keep the screen static for the lowest latency.
+  bool live(uint8_t keymap) const { return live_[keymap]; }
+  void set_live(uint8_t keymap, bool on) { live_[keymap] = on; }
+  uint8_t live_dirty() const { return live_dirty_; }
+  void clean_live(uint8_t bits) { live_dirty_ &= ~bits; }
   uint32_t last_edit() const { return last_edit_; }
   bool take_flush();  // a keymap is about to go live: write settings now
 
@@ -69,6 +75,7 @@ class Core {
   bool killed() const { return killed_; }
   bool usb_up() const { return usb_up_; }
   bool enabled(uint8_t t) const { return enabled_[t]; }
+  uint8_t held_keys() const { return killed_ ? 0 : held_; }  // keymap keys being sent
   bool active(uint8_t t) const { return active_[t]; }
   const char* banner(uint32_t now) const {
     return banner_until_ && !due(now, banner_until_) ? banner_ : nullptr;
@@ -116,6 +123,8 @@ class Core {
   bool enabled_[MAX_TOOLS] = {};
   bool active_[MAX_TOOLS] = {};
   uint16_t dirty_[MAX_TOOLS] = {};
+  bool live_[MAX_KEYMAPS] = {};
+  uint8_t live_dirty_ = 0;
   uint32_t last_edit_ = 0;
   bool flush_ = false;
 

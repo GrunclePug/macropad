@@ -17,6 +17,7 @@ void Core::begin(const Variant& v, Input& in, Arbiter& hid, Rng& rng) {
   c.detent = v.detent;
   in.begin(c);
 
+  for (uint8_t k = 0; k < MAX_KEYMAPS; k++) live_[k] = true;  // on by default
   hid.add(&keymap_out_);
   hid.add(&button_out_);
   for (uint8_t i = 0; i < v.ntools; i++) {
@@ -42,6 +43,7 @@ const char* Core::entry_name(uint8_t e) const {
 }
 
 bool Core::any_dirty() const {
+  if (live_dirty_) return true;
   for (uint8_t i = 0; i < v_->ntools; i++)
     if (dirty_[i]) return true;
   return false;
@@ -222,6 +224,13 @@ void Core::button_event(const Event& e, uint32_t now) {
         } else if (v_->entries[shown_].tool) {
           uint8_t i = v_->entries[shown_].index;
           enabled_[i] = !enabled_[i];
+          version_++;
+        } else if (!v_->keymaps[v_->entries[shown_].index].legend) {
+          // Saved later, off the keymap screen, like any setting.
+          uint8_t k = v_->entries[shown_].index;
+          live_[k] = !live_[k];
+          live_dirty_ |= 1u << k;
+          last_edit_ = now;
           version_++;
         }
       } else if (e.type == Ev::Hold) {

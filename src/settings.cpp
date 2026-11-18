@@ -16,7 +16,8 @@ bool retrying = false;
 
 }  // namespace
 
-void settings_begin(const Variant& v) {
+void settings_begin(Core& c) {
+  const Variant& v = c.variant();
 #ifdef MACROPAD_SELFTEST
   open_ = prefs.begin("macropad-test", false);  // never touch the real settings
 #else
@@ -39,6 +40,9 @@ void settings_begin(const Variant& v) {
     }
     v.tools[t]->clamp();
   }
+  for (uint8_t k = 0; k < v.nkeymaps; k++)
+    if (settings_key(key, v.keymaps[k].id, "live") && prefs.isKey(key))
+      c.set_live(k, prefs.getInt(key, 1) != 0);
 }
 
 void settings_service(Core& c, uint32_t now) {
@@ -65,6 +69,14 @@ void settings_service(Core& c, uint32_t now) {
       else
         failed = true;
     }
+  }
+  uint8_t ld = c.live_dirty();
+  for (uint8_t k = 0; k < v.nkeymaps; k++) {
+    if (!(ld & (1u << k))) continue;
+    if (settings_key(key, v.keymaps[k].id, "live") && prefs.putInt(key, c.live(k) ? 1 : 0) == 4)
+      c.clean_live(1u << k);
+    else
+      failed = true;
   }
   retrying = failed;
   if (failed) retry_at = now + RETRY_MS;

@@ -20,6 +20,7 @@ static void check_variant(const Variant& v) {
       if (b.kind == Binding::TOGGLE_TOOL) CHECK(b.usage < v.ntools);
     }
   char key[16];
+  for (uint8_t k = 0; k < v.nkeymaps; k++) CHECK(settings_key(key, v.keymaps[k].id, "live"));
   for (uint8_t t = 0; t < v.ntools; t++) {
     CHECK(strlen(v.tools[t]->id) <= 6);
     size_t n;

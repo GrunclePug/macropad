@@ -172,7 +172,24 @@ void selftest_step(uint32_t now) {
       WAIT(50);
       check("killswitch tap starts both armed tools", !core.killed() && core.active(click) && core.active(jit));
 
-      // --- Latency and chords on osu, with jitter and autoclicker running ---
+      // --- Live keys option: nav tap on osu toggles it (on by default) ---
+      check("live keys on by default", core.live(0));
+      TAP(NAV);
+      check("nav tap switches osu to low latency", !core.live(0));
+      TAP(NAV);
+      check("and back to live keys", core.live(0));
+      PRESS(K[1]);
+      PRESS(K[3]);
+      WAIT(150);
+      check("live keys: 2 and 4 shown as held", core.held_keys() == 0b1010);
+      Serial.println("--- osu frame, keys 2 and 4 held ---");
+      display_dump();
+      LIFT(K[1]);
+      LIFT(K[3]);
+      WAIT(100);
+
+      // --- Latency and chords on osu (live keys: redraws on every press),
+      // with jitter and autoclicker running ---
       WAIT(500);
       stats.max_gap_us = stats.gaps_over_2ms = stats.loops = 0;
       stats.measuring = true;

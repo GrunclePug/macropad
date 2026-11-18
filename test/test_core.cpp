@@ -177,6 +177,27 @@ TEST(killswitch_hold_spanning_a_link_change_keeps_tools_armed) {
   CHECK(r.core.killed() && r.core.enabled(pad::T_CLICK));
 }
 
+TEST(nav_tap_on_osu_toggles_live_keys) {
+  Rig r(VARIANT);
+  CHECK(r.core.live(0));  // on by default
+  r.tap_button(NAV);
+  CHECK(!r.core.live(0) && (r.core.live_dirty() & 1));
+  r.tap_button(NAV);
+  CHECK(r.core.live(0));
+}
+
+TEST(held_keys_shows_what_is_sent) {
+  Rig r(VARIANT);
+  r.keys = 0b1010;
+  r.run(20);
+  CHECK(r.core.held_keys() == 0b1010);
+  r.tap_button(KILL);
+  CHECK(r.core.held_keys() == 0);
+  r.keys = 0;
+  r.run(20);
+  r.tap_button(KILL);
+}
+
 TEST(held_key_released_when_menu_opens) {
   Rig r(VARIANT);
   r.keys = 1;
@@ -251,6 +272,8 @@ void run_core_tests() {
   RUN(key_that_opens_a_tool_does_not_repeat_into_it);
   RUN(two_keys_in_one_scan_from_the_menu_leave_nothing_held);
   RUN(killswitch_hold_spanning_a_link_change_keeps_tools_armed);
+  RUN(nav_tap_on_osu_toggles_live_keys);
+  RUN(held_keys_shows_what_is_sent);
   RUN(held_key_released_when_menu_opens);
   RUN(settings_edit_marks_dirty_and_keymap_flushes);
   RUN(deck_toggle_arms_while_killed);

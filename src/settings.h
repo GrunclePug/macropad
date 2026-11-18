@@ -11,7 +11,7 @@ namespace mp {
 // bytes). Pure, so the tests can check every key.
 bool settings_key(char* out, const char* tool, const char* param);
 
-void settings_begin(const Variant& v);  // load saved values
+void settings_begin(Core& c);  // load saved values
 void settings_service(Core& c, uint32_t now);
 bool settings_read(const char* tool, const char* param, int32_t& value);  // self-test
 
