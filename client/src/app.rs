@@ -293,11 +293,13 @@ impl App {
         self.saving = None;
         self.unresolved.clear();
         if same_pad && !usable && self.snapshot.is_some() {
-            self.notice = Some(
-                "The pad has no usable saved setup; the editor keeps yours. Save to restore it."
-                    .into(),
-            );
-            return (self.cfg.clone(), true);
+            if self.cfg != *pad {
+                self.notice = Some(
+                    "The pad has no usable saved setup; the editor keeps yours. Save to restore it."
+                        .into(),
+                );
+            }
+            return (self.cfg.clone(), self.cfg != *pad);
         }
         let unsaved = self.snapshot.as_ref().is_some_and(|old| *old != self.cfg);
         let Some(old) = self.snapshot.clone().filter(|_| same_pad && unsaved) else {
