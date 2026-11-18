@@ -46,6 +46,16 @@ TEST(records_round_trip_and_validate) {
   uint8_t r[CFG_SIZE];
   config_encode(st, r);
   CHECK(config_validate(r, CFG_SIZE).code == E_OK);
+  // Exactly CFG_SIZE: a longer buffer is refused, not truncated.
+  {
+    static uint8_t big[CFG_SIZE + 1];
+    Config c;
+    config_default(c);
+    config_encode(c, big);
+    CHECK(config_validate(big, CFG_SIZE).code == E_OK);
+    CfgError e = config_validate(big, CFG_SIZE + 1);
+    CHECK(e.code == E_LENGTH && e.offset == 6);
+  }
 }
 
 TEST(vectors_match_the_constants) {
@@ -222,6 +232,14 @@ TEST(proto_errors_and_pacing) {
   CHECK(r.ask("PUT\t0\tzz").find("ERR\t104") == 0);
   CHECK(r.ask("PUT\t0\t123").find("ERR\t104") == 0);
   CHECK(r.ask("GET\tx\t1").find("ERR\t102") == 0);
+  // Offsets that would overflow off + len, and the last valid ones.
+  CHECK(r.ask("GET\t9223372036854775807\t64").find("ERR\t103") == 0);
+  CHECK(r.ask("GET\t2147483647\t64").find("ERR\t103") == 0);
+  CHECK(r.ask("GET\t1354\t2").find("ERR\t103") == 0);
+  CHECK(r.ask("GET\t1354\t1").find("DATA\t") == 0);
+  CHECK(r.ask("PUT\t9223372036854775807\tabcd").find("ERR\t103") == 0);
+  CHECK(r.ask("PUT\t2147483647\tabcd").find("ERR\t103") == 0);
+  CHECK(r.ask("PUT\t1354\tabcd").find("ERR\t103") == 0);
   CHECK(r.ask(std::string(200, 'A')).find("ERR\t100\t0\tE_LINE") == 0);
   std::string p = r.ask("PINS");
   CHECK(p.find("PIN\t0\tD2\n") == 0 && p.find("PIN\t15\tA7\n") != std::string::npos && p.substr(p.size() - 3) == "OK\n");

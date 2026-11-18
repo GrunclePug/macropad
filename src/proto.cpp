@@ -146,7 +146,8 @@ void Proto::handle(char* line, Link& link) {
     valid();
     long off, len;
     if (n != 3 || !number(f[1], off) || !number(f[2], len)) return err(link, E_ARGS, 0, "GET offset len");
-    if (len < 1 || len > 64 || off + len > CFG_SIZE) return err(link, E_RANGE, 0, "out of range");
+    // No off + len: a huge off would overflow. number() rejects negatives.
+    if (len < 1 || len > 64 || off > (long)CFG_SIZE - len) return err(link, E_RANGE, 0, "out of range");
     char r[Link::MAX_LINE] = "DATA\t";
     char* p = r + 5;
     for (long i = 0; i < len; i++, p += 2) sprintf(p, "%02x", env_.staging[off + i]);
@@ -160,7 +161,7 @@ void Proto::handle(char* line, Link& link) {
     if (n != 3 || !number(f[1], off)) return err(link, E_ARGS, 0, "PUT offset hex");
     size_t h = strlen(f[2]);
     if (h == 0 || h % 2 || h > 128) return err(link, E_HEX, 0, "hex payload");
-    if (off + (long)(h / 2) > CFG_SIZE) return err(link, E_RANGE, 0, "out of range");
+    if (off > (long)CFG_SIZE - (long)(h / 2)) return err(link, E_RANGE, 0, "out of range");
     uint8_t bytes[64];
     for (size_t i = 0; i < h / 2; i++) {
       int a = hexval(f[2][2 * i]), b = hexval(f[2][2 * i + 1]);

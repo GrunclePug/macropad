@@ -270,7 +270,7 @@ CfgError config_validate(const uint8_t* p, size_t len) {
     v.fail(E_VERSION, 5);
     return v.err;
   }
-  if (len < CFG_SIZE || (p[6] | p[7] << 8) != CFG_SIZE) {
+  if (len != CFG_SIZE || (p[6] | p[7] << 8) != CFG_SIZE) {
     v.fail(E_LENGTH, 6);
     return v.err;
   }

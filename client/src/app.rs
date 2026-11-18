@@ -159,6 +159,9 @@ impl App {
         };
         self.error = None;
         self.busy = Some("Connecting".into());
+        // Writes stay off until this Connect succeeds.
+        self.session = None;
+        self.snapshot = None;
         self.worker.send(Req::Connect {
             path: p.path.clone(),
             serial: p.serial.clone(),

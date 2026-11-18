@@ -28,6 +28,8 @@ pub struct Pad {
     pub away: u32,
     /// Don't restart on COMMIT (a pad that lost power, say).
     pub no_reboot: bool,
+    /// Answer PINS with an error (a Connect that fails after HELLO).
+    pub fail_pins: bool,
     pub commits: u32,
     out: VecDeque<String>,
 }
@@ -44,6 +46,7 @@ impl FakePad {
             boot: 0x1000,
             away: 0,
             no_reboot: false,
+            fail_pins: false,
             commits: 0,
             out: VecDeque::new(),
         })))
@@ -57,6 +60,15 @@ impl FakePad {
 }
 
 impl Pad {
+    /// Restart on its own (a leave fallback or a crash): new nonce, normal
+    /// mode, staging back to the stored record. Old handles stop working.
+    pub fn restart(&mut self) {
+        self.mode = Mode::Normal;
+        self.boot = self.boot.wrapping_mul(2_654_435_761).wrapping_add(7);
+        self.staging = self.stored.clone();
+        self.out.clear();
+    }
+
     fn reply(&mut self, s: impl Into<String>) {
         self.out.push_back(s.into());
     }
@@ -80,6 +92,7 @@ impl Pad {
         let f: Vec<&str> = line.split('\t').collect();
         match f[0] {
             "HELLO" => self.hello(),
+            "PINS" if self.fail_pins => self.err(101, 0, "E_MODE: test"),
             "PINS" => {
                 for (i, n) in crate::keys::PIN_NAMES.iter().enumerate() {
                     self.reply(format!("PIN\t{i}\t{n}"));

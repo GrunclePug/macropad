@@ -111,6 +111,14 @@ void do_test(const char* what) {
 #endif
 }
 
+// HELLO reports the stored record's crc: keep it current after pad-side saves.
+void note_stored() {
+  static uint8_t rec[CFG_SIZE];
+  size_t n = store_read(rec);
+  env.has_crc = n == CFG_SIZE && !config_validate(rec, n).code;
+  env.stored_crc = env.has_crc ? config_crc(rec) : 0;
+}
+
 void enter_config(bool recovery, bool by_knock = false) {
   knock_entry = by_knock;
   entered_ms = millis();
@@ -119,12 +127,24 @@ void enter_config(bool recovery, bool by_knock = false) {
   proto.reset();
   knock.reset();
   env.recovery = recovery;
+  // Pad-side edits not yet saved go to flash first, so Connect shows them and
+  // a Save can't overwrite them. If that write fails, staging is the running
+  // config (with the edits) instead of the stored record.
+  bool flushed = true;
+  if (!recovery && boot.persist && core.dirty()) {
+    config_encode(cfg, env.staging);
+    flushed = store_write(env.staging) == E_OK;
+    if (flushed) {
+      core.clean();
+      note_stored();
+    }
+  }
   // Staging: the stored blob if it validates, otherwise the running config
   // (recovery: the compiled default).
-  size_t n = recovery ? 0 : store_read(env.staging);
+  size_t n = recovery || !flushed ? 0 : store_read(env.staging);
   if (recovery)
     stage_default();
-  else if (!n || config_validate(env.staging, n).code)
+  else if (n != CFG_SIZE || config_validate(env.staging, n).code)
     config_encode(cfg, env.staging);
 }
 
@@ -139,10 +159,11 @@ void serve_config(uint32_t now) {
   }
   proto.set_now(now);
   if (leaving == Leave::None && !restart_armed) proto.step(l);
-  if (!core.recovery() && proto.got_valid() && now - proto.last_valid_ms() > IDLE_CANCEL_MS)
+  // due(): signed, so a leave_at or entered_ms sampled after `now` can't wrap.
+  if (!core.recovery() && proto.got_valid() && due(now, proto.last_valid_ms() + IDLE_CANCEL_MS))
     begin_leave("Timed out");
   // A knock with no app behind it (a crashed client, a stray line toggle).
-  if (knock_entry && !proto.got_valid() && now - entered_ms > HANDSHAKE_MS) begin_leave("No app");
+  if (knock_entry && !proto.got_valid() && due(now, entered_ms + HANDSHAKE_MS)) begin_leave("No app");
   if (!restart_armed) {
     if (core.recovery()) {
       snprintf(status_text, sizeof status_text, "Error %s: open the app", cfg_status + 8);
@@ -162,7 +183,7 @@ void finish_leave(uint32_t now) {
       core.leave_config();
       knock.reset();
       core.notice(leave_msg, now, 1500);
-    } else if (now - leave_at > DRAIN_MS) {
+    } else if (due(now, leave_at + DRAIN_MS)) {
       ESP.restart();  // boots with every tool off
     }
   }
@@ -309,6 +330,7 @@ void app_loop() {
   core.link(usb_up(), disturbed);
   if (disturbed && core.config_mode()) {
     cdc_link().usb_break();
+    proto.reset();  // no half-sent PINS/TOOLS reply carries into the next session
     if (core.recovery()) stage_default();
   }
 
@@ -320,8 +342,10 @@ void app_loop() {
     // Normal mode touches no CDC endpoint: only the line state, for the knock.
     bool dtr, rts;
     cdc_line_state(dtr, rts);
-    if (knock.feed(dtr, rts, now)) enter_config(false, true);
-    store_service(core, cfg, boot.persist, now);  // before a newly shown key screen goes live
+    if (knock.feed(dtr, rts, now))
+      enter_config(false, true);
+    else if (store_service(core, cfg, boot.persist, now))  // before a newly shown key screen goes live
+      note_stored();
   } else {
     serve_config(now);
   }

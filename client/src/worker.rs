@@ -91,6 +91,7 @@ impl Worker {
                 in_config: false,
                 recovery: false,
                 boot: 0,
+                expected_crc: None,
                 out: resp_tx,
                 wake: Box::new(wake),
             }
@@ -129,6 +130,10 @@ struct State<P: Ports> {
     in_config: bool,
     recovery: bool,
     boot: u32,
+    /// The record the pad should hold: read at Connect, or last saved. A
+    /// pad that restarted on its own still counts as this session if it
+    /// holds exactly this.
+    expected_crc: Option<u32>,
     out: Sender<Resp>,
     wake: Box<dyn Fn() + Send>,
 }
@@ -146,6 +151,10 @@ impl<P: Ports> State<P> {
             match rx.recv_timeout(wait) {
                 Ok(Req::Connect { path, serial }) => {
                     self.leave();
+                    // No target until this Connect succeeds: a failed one
+                    // must not leave Save pointed at a half-read pad.
+                    self.path.clear();
+                    self.serial = None;
                     let r = self.connect(&path, serial);
                     self.report(r, |s| Resp::Connected(Box::new(s)));
                 }
@@ -215,15 +224,25 @@ impl<P: Ports> State<P> {
         if hello.mode != "config" && hello.mode != "recovery" {
             bail!("the pad answered in {} mode", hello.mode);
         }
+        self.emit(Resp::Progress("Reading the setup".into()));
+        let read = c.pins().and_then(|p| Ok((p, c.tools()?, c.get_record()?)));
+        let (pins, tools, record) = match read {
+            Ok(v) => v,
+            Err(e) => {
+                // Let the pad go back to work, and keep no target.
+                if hello.mode == "config" {
+                    let _ = c.exit();
+                }
+                return Err(e);
+            }
+        };
+        // Only now is this the pad that Check and Save talk to.
         self.path = path.into();
         self.serial = serial;
         self.recovery = hello.mode == "recovery";
         self.boot = hello.boot;
+        self.expected_crc = hello.crc;
         self.in_config = true;
-        self.emit(Resp::Progress("Reading the setup".into()));
-        let pins = c.pins()?;
-        let tools = c.tools()?;
-        let record = c.get_record()?;
         self.client = Some(c);
         Ok(Session {
             hello,
@@ -239,23 +258,66 @@ impl<P: Ports> State<P> {
             .ok_or_else(|| anyhow::anyhow!("not connected"))
     }
 
-    /// Make sure the pad is in config mode: after a pad-side cancel, reopen
-    /// and knock.
+    /// Open the session's port again: by USB serial number when there is
+    /// one, because a restarted pad can come back under another name.
+    fn reopen(&mut self) -> Result<()> {
+        if self.path.is_empty() {
+            bail!("not connected");
+        }
+        self.client = None;
+        if let Some(sn) = self.serial.clone()
+            && let Some(p) = self.ports.find(&sn)
+        {
+            self.path = p;
+        }
+        let port = self.ports.open(&self.path)?;
+        self.client = Some(Client::new(port));
+        Ok(())
+    }
+
+    /// Make sure the same pad is in config mode: after a pad-side cancel or
+    /// a restart, reopen and knock. Every path checks the boot nonce.
     fn ready(&mut self) -> Result<()> {
         if self.client.is_none() {
-            let port = self.ports.open(&self.path)?;
-            self.client = Some(Client::new(port));
+            self.reopen()?;
         }
-        let alive = self.in_config && self.client()?.hello().is_ok();
-        if !alive {
-            self.emit(Resp::Progress("Asking the pad to enter config mode".into()));
-            let h = self.client()?.connect()?;
-            if h.boot != self.boot {
-                bail!("the pad restarted since Connect; connect again");
+        let quick = if self.in_config {
+            self.client()?.hello().ok()
+        } else {
+            None
+        };
+        let h = match quick {
+            Some(h) => h,
+            None => {
+                self.emit(Resp::Progress("Asking the pad to enter config mode".into()));
+                match self.client()?.connect() {
+                    Ok(h) => h,
+                    Err(_) => {
+                        // The handle may belong to a pad that restarted.
+                        self.reopen()?;
+                        self.client()?.connect()?
+                    }
+                }
             }
-            self.recovery = h.mode == "recovery";
-            self.in_config = true;
+        };
+        if h.boot != self.boot {
+            // A restart (the pad's leave fallback, a crash) is fine only if
+            // the pad still holds exactly the record this session expects.
+            if h.cfg == "ok" && h.crc.is_some() && h.crc == self.expected_crc {
+                self.boot = h.boot;
+            } else {
+                // Not this session's pad any more: let it go back to work.
+                if h.mode == "config" {
+                    let _ = self.client()?.exit();
+                }
+                self.client = None;
+                self.in_config = false;
+                self.path.clear();
+                bail!("the pad restarted with a different setup since Connect; connect again");
+            }
         }
+        self.recovery = h.mode == "recovery";
+        self.in_config = true;
         Ok(())
     }
 
@@ -267,6 +329,9 @@ impl<P: Ports> State<P> {
     }
 
     fn save(&mut self, rec: &[u8]) -> Result<()> {
+        if self.path.is_empty() {
+            bail!("not connected");
+        }
         let Some(serial) = self.serial.clone() else {
             bail!(
                 "this port has no USB serial number, so the pad can't be found again after it restarts"
@@ -320,6 +385,7 @@ impl<P: Ports> State<P> {
                     }
                     self.path = path;
                     self.boot = h.boot;
+                    self.expected_crc = Some(want);
                     let _ = c.exit();
                     return Ok(());
                 }
@@ -435,5 +501,56 @@ mod tests {
         w.send(Req::Check(s.record));
         assert!(matches!(next(&w), Resp::Checked));
         assert_eq!(pad.lock().commits, 0);
+    }
+
+    #[test]
+    fn a_failed_connect_leaves_no_target() {
+        let rec = builtin("pad").expect("pad").encode().expect("encode");
+        let pad = FakePad::new(rec.clone());
+        pad.lock().fail_pins = true;
+        let w = Worker::spawn(FakePorts(pad.clone()), || {});
+        w.send(Req::Connect {
+            path: FAKE_PATH.into(),
+            serial: Some(FAKE_SERIAL.into()),
+        });
+        assert!(!matches!(next(&w), Resp::Connected(_)));
+        assert_eq!(pad.lock().mode, Mode::Normal, "the pad was let go");
+        w.send(Req::Save(rec));
+        let Resp::Failed(m) = next(&w) else {
+            panic!("saved without a session")
+        };
+        assert!(m.contains("not connected"), "{m}");
+        assert_eq!(pad.lock().commits, 0);
+    }
+
+    #[test]
+    fn a_pad_that_restarted_with_the_same_record_still_saves() {
+        let (pad, w, s) = setup();
+        pad.lock().restart();
+        let mut c = Config::decode(&s.record).expect("decode");
+        c.release_ms = 11;
+        let rec = c.encode().expect("encode");
+        w.send(Req::Save(rec.clone()));
+        assert!(matches!(next(&w), Resp::Saved));
+        assert_eq!(pad.lock().stored, rec);
+    }
+
+    #[test]
+    fn a_pad_that_restarted_with_another_record_is_refused() {
+        let (pad, w, s) = setup();
+        {
+            let mut p = pad.lock();
+            let mut c = Config::decode(&p.stored).expect("decode");
+            c.release_ms = 12;
+            p.stored = c.encode().expect("encode");
+            p.restart();
+        }
+        w.send(Req::Save(s.record.clone()));
+        let Resp::Failed(m) = next(&w) else {
+            panic!("not refused")
+        };
+        assert!(m.contains("different setup"), "{m}");
+        assert_eq!(pad.lock().commits, 0);
+        assert_eq!(pad.lock().mode, Mode::Normal, "the pad was let go");
     }
 }

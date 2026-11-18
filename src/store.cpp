@@ -33,7 +33,12 @@ void store_begin() {
 size_t store_read(uint8_t* buf) {
   if (!open_ || !prefs.isKey("cfg")) return 0;
   size_t n = prefs.getBytesLength("cfg");
-  if (n > CFG_SIZE) n = CFG_SIZE;
+  if (n > CFG_SIZE) {
+    // Too long to read: invalid, never "absent" (that would allow autosave
+    // over it). The zeroed buffer fails validation.
+    memset(buf, 0, CFG_SIZE);
+    return n;
+  }
   return prefs.getBytes("cfg", buf, n);
 }
 
@@ -49,24 +54,25 @@ uint8_t store_write(const uint8_t* rec) {
   return E_OK;
 }
 
-void store_service(Core& core, const Config& cfg, bool persist, uint32_t now) {
+bool store_service(Core& core, const Config& cfg, bool persist, uint32_t now) {
   bool flush = core.take_flush();
-  if (!persist || !core.dirty()) return;
+  if (!persist || !core.dirty()) return false;
   if (!flush) {
     // No writes while a key screen is live, and not until edits settle.
-    if (core.keymap_live()) return;
-    if (now - core.last_edit() < IDLE_MS) return;
-    if (retrying && !due(now, retry_at)) return;
+    if (core.keymap_live()) return false;
+    if (now - core.last_edit() < IDLE_MS) return false;
+    if (retrying && !due(now, retry_at)) return false;
   }
   static uint8_t rec[CFG_SIZE];
   config_encode(cfg, rec);
   if (store_write(rec) == E_OK) {
     core.clean();
     retrying = false;
-  } else {
-    retrying = true;
-    retry_at = now + RETRY_MS;
+    return true;
   }
+  retrying = true;
+  retry_at = now + RETRY_MS;
+  return false;
 }
 
 }  // namespace mp
