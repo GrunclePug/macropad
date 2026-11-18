@@ -430,6 +430,9 @@ fn merge_spans() -> Vec<(usize, usize, bool)> {
 /// A `merge3` conflict at `DROPPED_SET + k`: the pad deleted the key set in
 /// slot `k` of the base record, and the editor's edits to it were dropped.
 pub const DROPPED_SET: usize = 0x1_0000;
+/// A `merge3` conflict: the start-up set the editor picked is gone, so the
+/// merged record keeps the pad's choice.
+pub const STARTUP_GONE: usize = 0x2_0000;
 
 /// Rebase edits onto a record that changed underneath them, field by field:
 /// a field the editor changed from `base` keeps the editor's value, any other
@@ -571,7 +574,7 @@ pub fn merge3(base: &[u8], mine: &[u8], theirs: &[u8]) -> Result<(Vec<u8>, Vec<u
         None => {
             // The chosen set is gone: the pad's surviving choice if any,
             // and say so.
-            conflicts.push(STARTUP);
+            conflicts.push(STARTUP_GONE);
             at(&ct).or_else(|| at(&cm)).unwrap_or(0)
         }
     };
@@ -982,7 +985,7 @@ mod tests {
             "media",
             "not silently osu"
         );
-        assert!(conflicts.contains(&1351), "{conflicts:?}");
+        assert!(conflicts.contains(&STARTUP_GONE), "{conflicts:?}");
     }
 
     #[test]

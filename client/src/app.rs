@@ -297,7 +297,7 @@ impl App {
                 merged
             }
             Ok((merged, conflicts)) => {
-                self.notice = Some(conflict_notice(&old, &conflicts));
+                self.notice = Some(conflict_notice(&old, &merged, &conflicts));
                 merged
             }
             Err(_) => {
@@ -853,8 +853,8 @@ fn empty_config() -> Config {
 }
 
 /// What a rebase with conflicts tells the user, by kind.
-fn conflict_notice(base: &Config, conflicts: &[usize]) -> String {
-    use crate::config::DROPPED_SET;
+fn conflict_notice(base: &Config, merged: &Config, conflicts: &[usize]) -> String {
+    use crate::config::{DROPPED_SET, STARTUP_GONE};
     let mut parts =
         vec!["Your unsaved edits are kept on top of the pad's current setup".to_string()];
     for &o in conflicts.iter().filter(|&&o| o >= DROPPED_SET) {
@@ -866,12 +866,22 @@ fn conflict_notice(base: &Config, conflicts: &[usize]) -> String {
             "{name} was removed on the pad, so your edits to it were dropped"
         ));
     }
+    if conflicts.contains(&STARTUP_GONE) {
+        let name = merged
+            .sets
+            .get(usize::from(merged.selected))
+            .map_or("the first set", |s| s.name.as_str());
+        parts.push(format!(
+            "the start-up set you picked is gone, so the pad starts on {name}"
+        ));
+    }
     if conflicts.contains(&67) {
         parts.push("the key sets changed on both sides, so your set list is kept".into());
     }
     let mut fields: Vec<String> = conflicts
         .iter()
         .filter(|&&o| o < DROPPED_SET && o != 67)
+        .filter(|&&o| o != STARTUP_GONE)
         .map(|&o| crate::config::field_at(o))
         .collect();
     fields.dedup();
@@ -1353,9 +1363,18 @@ mod tests {
     #[test]
     fn the_notice_says_which_set_the_pad_removed() {
         let base = builtin("pad").expect("pad"); // osu!mania, Stream, Media
-        let n = conflict_notice(&base, &[crate::config::DROPPED_SET + 1, 62]);
+        let n = conflict_notice(&base, &base, &[crate::config::DROPPED_SET + 1, 62]);
         assert!(n.contains("Stream was removed on the pad"), "{n}");
         assert!(n.contains("release debounce"), "{n}");
         assert!(!n.contains("key set count"), "{n}");
+        // A start-up pick that's gone: says where it stays, not "your values".
+        let mut merged = base.clone();
+        merged.selected = 2; // Media
+        let n = conflict_notice(&base, &merged, &[crate::config::STARTUP_GONE]);
+        assert!(
+            n.contains("the start-up set you picked is gone, so the pad starts on Media"),
+            "{n}"
+        );
+        assert!(!n.contains("Save would replace"), "{n}");
     }
 }

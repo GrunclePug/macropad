@@ -66,9 +66,8 @@ void stage_default() {
 
 // HELLO's crc from what flash holds now, read back (after an E_VERIFY the
 // write happened but its read-back differed, so RAM can't be trusted).
-void crc_from_flash() {
-  static uint8_t rec[CFG_SIZE];
-  size_t n = store_read(rec);
+// `rec`/`n`: the record just read back from flash.
+void crc_from_flash(const uint8_t* rec, size_t n) {
   env.has_crc = n == CFG_SIZE && !config_validate(rec, n).code;
   env.stored_crc = env.has_crc ? config_crc(rec) : 0;
   if (env.has_crc && !strcmp(cfg_status, "none")) strcpy(cfg_status, "ok");
@@ -80,10 +79,11 @@ uint8_t do_commit(const uint8_t* rec) {
     // Read back once more: if flash does hold exactly this record, the save
     // happened, and it ends the normal way (OK and a restart).
     static uint8_t again[CFG_SIZE];
-    if (store_read(again) == CFG_SIZE && !memcmp(again, rec, CFG_SIZE)) {
+    size_t n = store_read(again);
+    if (n == CFG_SIZE && !memcmp(again, rec, CFG_SIZE)) {
       r = E_OK;
     } else if (!core.recovery()) {
-      crc_from_flash();  // recovery keeps reporting no stored record
+      crc_from_flash(again, n);  // the same read decides (recovery keeps "none")
     }
   }
   if (r == E_OK) {
