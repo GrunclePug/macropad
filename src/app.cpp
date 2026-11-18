@@ -125,7 +125,9 @@ uint8_t do_commit(const uint8_t* rec) {
     if (v.landed)
       r = E_OK;
     else if (!core.recovery())
-      apply(v, again, nullptr);  // the same read decides (recovery keeps "none")
+      apply(v, again, nullptr);  // the same read decides
+    else
+      flash_state.verified = v.state.verified;  // recovery keeps "none", but remembers a valid read
   }
   if (r == E_OK) {
     core.freeze();  // terminal: no dispatch, no pad input until the restart

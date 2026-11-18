@@ -307,13 +307,13 @@ pub fn builtin(name: &str) -> Option<Config> {
 pub fn write_file(path: &std::path::Path, text: &str) -> Result<()> {
     use std::io::Write;
     let dir = path.parent().filter(|d| !d.as_os_str().is_empty());
-    let name = path
-        .file_name()
-        .with_context(|| format!("{} names no file", path.display()))?;
+    if path.file_name().is_none() {
+        anyhow::bail!("{} names no file", path.display());
+    }
     for n in 0..100 {
-        let mut tmp_name = std::ffi::OsString::from(".");
-        tmp_name.push(name);
-        tmp_name.push(format!(".{}-{n}.tmp", std::process::id()));
+        // Short, so any legal file name still fits; create_new skips a name
+        // that's taken (the destination's own, too).
+        let tmp_name = format!(".macropad-{}-{n}.tmp", std::process::id());
         let tmp = dir.map_or_else(|| tmp_name.clone().into(), |d| d.join(&tmp_name));
         let mut f = match std::fs::OpenOptions::new()
             .write(true)
@@ -324,9 +324,9 @@ pub fn write_file(path: &std::path::Path, text: &str) -> Result<()> {
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e).with_context(|| format!("create {}", tmp.display())),
         };
-        let done = f
-            .write_all(text.as_bytes())
-            .and_then(|()| f.sync_all())
+        let written = f.write_all(text.as_bytes()).and_then(|()| f.sync_all());
+        drop(f); // closed before the rename (Windows)
+        let done = written
             .with_context(|| format!("write {}", tmp.display()))
             .and_then(|()| {
                 std::fs::rename(&tmp, path).with_context(|| format!("rename to {}", path.display()))
@@ -363,6 +363,9 @@ mod tests {
             std::fs::read_to_string(&other).expect("read"),
             "into pad.tmp"
         );
+        let long = dir.join(format!("{}.toml", "p".repeat(250))); // 255 bytes
+        write_file(&long, "long").expect("a legal long name");
+        std::fs::remove_file(&long).expect("rm");
         let left: Vec<_> = std::fs::read_dir(&dir).expect("ls").collect();
         assert_eq!(left.len(), 2, "no temporary file left behind");
         std::fs::remove_dir_all(&dir).expect("clean up");

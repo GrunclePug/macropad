@@ -98,6 +98,7 @@ class Core {
   bool live(uint8_t set) const { return cfg_->sets[set].flags & SET_LIVE; }
   uint8_t held_keys() const { return killed_ || config_ ? 0 : held_; }
   bool killed() const { return killed_; }
+  uint32_t link_gen() const { return link_gen_; }  // counts link losses and returns
   bool usb_up() const { return usb_up_; }
   bool enabled(uint8_t t) const { return enabled_[t]; }
   bool active(uint8_t t) const { return active_[t]; }

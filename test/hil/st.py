@@ -2,14 +2,14 @@
 """Run the on-device self-test under a serial host load, then knock and read
 its report.
 
-usage: st.py SERIAL MODE OUT
+usage: st.py SERIAL MODE OUT [WAIT_S]
   idle    open the port and keep it open
   flood   write HELLO lines and junk as fast as the port takes them
   noread  write HELLO every 10 ms
-The load runs until the pad's HID reports have been quiet for 8 s (after at
-least 25 s): the self-test is done. Then the knock, and the report is read
-from config mode. Reopens the port when the pad drops off USB (the self-test
-includes a USB detach).
+The load runs for WAIT_S seconds (default 100, longer than the self-test).
+Then the knock, and the report is read from config mode; TESTACK only once
+its summary was read. Reopens the port when the pad drops off USB (the
+self-test includes a USB detach). Exits 1 if no report was read.
 """
 import glob, os, select, sys, threading, time
 import serial
@@ -69,7 +69,6 @@ last_note = -1
 while True:
     now = time.monotonic()
     if t() > WAIT_S: break
-    if t() > 240: note('timeout waiting for the self-test'); break
     if port is None:
         opener(); time.sleep(0.05); continue
     try:
@@ -108,7 +107,8 @@ while time.monotonic() < end:
     if b'checks,' in buf and buf.endswith(b'\n') and b'===' in buf.split(b'checks,')[-1]:
         time.sleep(0.5); buf += port.read(4096); break
     time.sleep(0.02)
-port.write(b"TESTACK\n"); time.sleep(0.3)
+got = b'checks,' in buf
+if got: port.write(b"TESTACK\n"); time.sleep(0.3)   # read: it may go
 port.write(b"EXIT\n"); time.sleep(0.5)
 try: buf += port.read(4096)
 except Exception: pass
@@ -116,3 +116,4 @@ log.write(buf.decode(errors='replace'))
 stop = True
 port.reset_output_buffer(); port.close()
 note('end')
+sys.exit(0 if got else 1)

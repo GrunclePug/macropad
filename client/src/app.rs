@@ -44,6 +44,10 @@ pub struct App {
     snapshot_serial: Option<String>,
     /// The serial number of the pad a Connect in flight is for.
     connecting_serial: Option<String>,
+    /// The last Connect found a flash fault: the editor holds the pad's
+    /// running setup (pad-side edits included), which the next Connect to
+    /// that pad keeps rather than replacing it with the stored record.
+    unverified_draft: bool,
     /// The setup a Save in flight sent.
     saving: Option<Config>,
     /// Saves whose outcome stayed open (a reboot check that timed out, an
@@ -76,6 +80,7 @@ impl App {
             snapshot: None,
             snapshot_serial: None,
             connecting_serial: None,
+            unverified_draft: false,
             saving: None,
             unresolved: Vec::new(),
             busy: None,
@@ -210,13 +215,14 @@ impl App {
                          plug it back in and connect again; the editor keeps your setup."
                     } else {
                         "The pad can't read its stored setup back (a flash fault). Unplug it, \
-                         plug it back in and connect again."
+                         plug it back in and connect again; the editor keeps the setup it read."
                     };
                     self.notice = Some(match earlier {
                         Some(e) => format!("{e} {fault}"),
                         None => fault.into(),
                     });
                 }
+                self.unverified_draft = unverified;
                 self.snapshot = Some(c);
                 self.snapshot_serial = self.connecting_serial.take();
                 self.error = None;
@@ -315,6 +321,19 @@ impl App {
         self.saving = None;
         self.unresolved.clear();
         self.notice = None;
+        // The last Connect to this pad couldn't vouch for its setup: what it
+        // read (with the pad's unsaved edits) stays, so a restart that brings
+        // the old record back doesn't drop those edits unseen.
+        if std::mem::take(&mut self.unverified_draft) && same_pad {
+            if self.cfg != *pad {
+                self.notice = Some(
+                    "The editor still holds the setup read before the restart, edits made on the pad \
+                     included. Save to store it, or Revert to take the pad's."
+                        .into(),
+                );
+            }
+            return (self.cfg.clone(), self.cfg != *pad);
+        }
         if same_pad && !usable && self.snapshot.is_some() {
             if self.cfg != *pad {
                 self.notice = Some(
@@ -1278,6 +1297,58 @@ mod tests {
         a.connecting_serial = Some("B".into());
         a.on_connect(session);
         assert_eq!(a.cfg, default);
+    }
+
+    #[test]
+    fn a_flash_fault_keeps_the_pads_running_setup_across_the_replug() {
+        let mut a = app();
+        let old = builtin("pad").expect("pad"); // the stored record
+        let mut running = old.clone();
+        running.release_ms = 9; // edited on the pad, never stored
+        let mut session = Session {
+            hello: crate::protocol::Hello {
+                fw: "0.3.0".into(),
+                mode: "config".into(),
+                cfg: "ok".into(),
+                crc: None, // the flash fault
+                boot: 1,
+                sn: None,
+            },
+            pins: PIN_NAMES
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (u8::try_from(i).expect("16 pins"), (*n).to_string()))
+                .collect(),
+            tools: builtin_tools(),
+            record: running.encode().expect("encode"),
+        };
+        a.connecting_serial = Some("A".into());
+        a.on_connect(session.clone());
+        assert_eq!(a.cfg, running);
+        assert!(
+            a.notice
+                .as_ref()
+                .expect("notice")
+                .contains("keeps the setup it read")
+        );
+        // The replug: the old record reads again.
+        session.hello.crc = Some(1);
+        session.hello.boot = 2;
+        session.record = old.encode().expect("encode");
+        a.connecting_serial = Some("A".into());
+        a.on_connect(session.clone());
+        assert_eq!(a.cfg, running, "the pad's unsaved edit isn't dropped");
+        assert_eq!(a.snapshot.as_ref(), Some(&old));
+        assert!(
+            a.notice
+                .as_ref()
+                .expect("notice")
+                .contains("before the restart")
+        );
+        // Only once: the next Connect rebases as usual.
+        a.connecting_serial = Some("A".into());
+        a.on_connect(session);
+        assert_eq!(a.cfg.release_ms, 9, "still an unsaved edit, rebased");
     }
 
     #[test]

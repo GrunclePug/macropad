@@ -139,7 +139,8 @@ void rep(const char* fmt, ...) {
 }
 
 int cleanup_state[7] = {-1, -1, -1, -1, -1, -1, -1};
-int cleanup_holds = 0;  // killswitch holds the clean-up had to repeat
+int cleanup_holds = 0;        // killswitch holds the clean-up had to repeat
+int cleanup_unexplained = 0;  // of those, repeats with no link change during the hold
 
 bool any_enabled() {
   for (uint8_t k = 0; k < core.variant().ntools; k++)
@@ -254,7 +255,7 @@ void selftest_restart() {
   nlat = 0;
   lat_pending = chord_pending = false;
   chord_ok = chord_split = 0;
-  cleanup_holds = 0;
+  cleanup_holds = cleanup_unexplained = 0;
   kb_reports = mods_seen = f17_reports = f13_reports = 0;
   stats.measuring = false;
   stats.max_gap_us = stats.gaps_over_2ms = stats.loops = 0;
@@ -264,7 +265,7 @@ void selftest_step(uint32_t now) {
   static uint8_t K[4], KILL, NAV;
   static int i, j;
   static int32_t v;
-  static uint32_t t, calls;
+  static uint32_t t, calls, gen0;
   static bool running = false;
 
   // Never drive pins outside normal mode: stop and release everything.
@@ -508,12 +509,14 @@ void selftest_step(uint32_t now) {
       // A link change during the hold (the host may suspend the pad after the
       // reconnect above) discards it, by design: hold again until it took.
       for (j = 0; j < 4; j++) {
+        gen0 = core.link_gen();  // the link before this hold
         PRESS(KILL);
         WAIT(800);
         LIFT(KILL);
         WAIT(100);
         if (!any_enabled()) break;
         cleanup_holds++;
+        if (core.link_gen() == gen0) cleanup_unexplained++;  // no link change discarded it
       }
       TAP(KILL);
       HOLD(NAV);
@@ -524,8 +527,10 @@ void selftest_step(uint32_t now) {
       TAP(K[2]);
       TAP(K[2]);
       WAIT(1500);
-      check("clean up: nothing held, osu shown", hid.sent_buttons() == 0 && hid.sent_keys().empty() &&
-                                                    core.screen() == Core::Screen::Keys && core.set() == 0);
+      check("clean up: every tool off, nothing held, osu shown",
+            !any_enabled() && hid.sent_buttons() == 0 && hid.sent_keys().empty() &&
+                core.screen() == Core::Screen::Keys && core.set() == 0);
+      check("clean up: a hold was repeated only after a link change", cleanup_unexplained == 0);
       cleanup_state[0] = (int)core.screen();
       cleanup_state[1] = core.set();
       cleanup_state[2] = core.in_menu();

@@ -35,12 +35,14 @@ if mode == 'erase':
     req(s, b'TESTERASE\tnorun\n'); s.close(); time.sleep(3)
     time.sleep(5)   # past the script's 3 s start: norun must hold it
     s = knock(); h = hello(s); print('after TESTERASE norun (8 s):', h['cfg'], h['crc'])
-    req(s, b'TESTTAP\n'); req(s, b'EXIT\n'); s.close(); time.sleep(1.5)
+    running = record(s); before = '%08x' % int.from_bytes(running[12:16], 'little')
+    req(s, b'TESTTAP\n'); req(s, b'EXIT\n'); s.close(); time.sleep(1.5)   # a pad edit: the live flag
     s = knock(); h = hello(s); rec = record(s)
     stored = '%08x' % int.from_bytes(rec[12:16], 'little')
-    print('after a pad edit and a knock: cfg', h['cfg'], 'crc', h['crc'], 'GET record crc', stored)
-    print('PASS' if h['cfg'] == 'ok' and h['crc'] == stored else 'FAIL', 'fresh pad: entry creates the record; HELLO matches GET')
-    req(s, b'TESTERASE\n'); s.close(); time.sleep(3)   # fresh again, for the push
+    print('after a pad edit and a knock: cfg', h['cfg'], 'crc', h['crc'], 'GET record crc', stored, '(before the edit', before + ')')
+    ok = h['cfg'] == 'ok' and h['crc'] == stored and stored != before
+    print('PASS' if ok else 'FAIL', 'fresh pad: entry creates the record with the edit; HELLO matches GET')
+    req(s, b'TESTERASE\tnorun\n'); s.close(); time.sleep(3)   # fresh again and idle, for the push
 elif mode == 'corrupt':
     req(s, b'TESTCORRUPT\n'); s.close(); time.sleep(3)
     s = knock(); h = hello(s); print('after TESTCORRUPT:', h['mode'], h['cfg']); s.close()
