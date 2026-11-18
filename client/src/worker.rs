@@ -386,7 +386,13 @@ impl<P: Ports> State<P> {
         // no change: a restart loses nothing.
         let nothing_stored =
             h.crc.is_none() && self.expected_crc.is_none() && h.cfg == self.connect_cfg;
-        let refuse = if changed {
+        // A stored record this session knew, now reported without a crc
+        // (its flash read failed or came back invalid): unverified, so no
+        // write on top of it.
+        let unverified = h.cfg == "ok" && h.crc.is_none() && self.expected_crc.is_some();
+        let refuse = if unverified {
+            Some("the pad can't confirm its stored setup right now")
+        } else if changed {
             Some("the pad's saved setup changed since Connect (edited on the pad?)")
         } else if restarted && !(h.cfg == "ok" && known) && !nothing_stored {
             Some("the pad restarted and is no longer running the setup read at Connect")
@@ -519,6 +525,17 @@ impl<P: Ports> State<P> {
                     if h.mode != "config" || h.cfg != "ok" || h.crc != Some(want) {
                         if h.mode == "config" {
                             let _ = c.exit();
+                        }
+                        if h.cfg == "ok" && h.crc.is_some() && h.crc == self.expected_crc {
+                            // Restarted on the record read at Connect: this
+                            // Save conclusively didn't land.
+                            let c = stored_crc(rec);
+                            self.attempted.retain(|(a, _)| *a != c);
+                            self.boot = h.boot;
+                            self.path = path;
+                            bail!(
+                                "the pad restarted without the new setup; your edits are still here"
+                            );
                         }
                         bail!(
                             "the pad restarted with a different setup (mode {}, cfg {}, crc {:08x?}); \
@@ -1062,5 +1079,29 @@ mod tests {
         w.send(Req::Check(s.record.clone()));
         assert!(matches!(next(&w), Resp::Settled));
         assert!(matches!(next(&w), Resp::Checked));
+    }
+
+    #[test]
+    fn a_stored_setup_without_a_crc_is_not_written_over() {
+        let (pad, w, s) = setup();
+        pad.lock().hide_crc = true; // cfg ok, crc none: flash unreadable
+        w.send(Req::Save(edited(&s.record)));
+        assert!(matches!(next(&w), Resp::Disconnected));
+        let Resp::Failed(m) = next(&w) else {
+            panic!("wrote over an unverified setup")
+        };
+        assert!(m.contains("can't confirm"), "{m}");
+        assert_eq!(pad.lock().commits, 0);
+    }
+
+    #[test]
+    fn a_restart_on_the_old_record_settles_the_save() {
+        let (pad, w, s) = setup();
+        pad.lock().lose_commit = true; // OK, restart, but the record didn't stick
+        w.send(Req::Save(edited(&s.record)));
+        let Resp::Failed(m) = next_raw(&w) else {
+            panic!("expected a plain failure, no Unresolved first")
+        };
+        assert!(m.contains("without the new setup"), "{m}");
     }
 }

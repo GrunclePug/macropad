@@ -38,6 +38,10 @@ pub struct Pad {
     pub report_crc: Option<u32>,
     /// Refuse COMMIT definitively.
     pub fail_commit: bool,
+    /// Reply OK to COMMIT and restart, but keep the old record.
+    pub lose_commit: bool,
+    /// Report `crc none` while `cfg ok` (a flash read that failed).
+    pub hide_crc: bool,
     /// Refuse COMMIT with this code instead (106: E_VERIFY).
     pub fail_commit_code: Option<u8>,
     /// The USB serial number HELLO reports.
@@ -66,6 +70,8 @@ impl FakePad {
             no_reboot: false,
             fail_pins: false,
             fail_commit: false,
+            lose_commit: false,
+            hide_crc: false,
             fail_commit_code: None,
             sn: FAKE_SERIAL.into(),
             swap_sn_on_commit: None,
@@ -126,6 +132,9 @@ impl Pad {
         };
         if let Some(c) = self.report_crc {
             crc = format!("{c:08x}");
+        }
+        if self.hide_crc {
+            crc = "none".into();
         }
         self.reply(format!(
             "OK\tmacropad\t0.3.0\tproto 1\tmode {mode}\tcfg {cfg}\tcrc {crc}\tboot {:08x}\tsn {}",
@@ -191,8 +200,10 @@ impl Pad {
                     // confirmed second read into an ordinary save).
                     return self.err(code, 0, "E_VERIFY: read-back differs");
                 }
-                self.stored = self.staging.clone();
-                self.recovery = false;
+                if !self.lose_commit {
+                    self.stored = self.staging.clone();
+                    self.recovery = false;
+                }
                 self.commits += 1;
                 let crc = stored_crc(&self.stored);
                 self.reply(format!("OK\t{crc:08x}"));

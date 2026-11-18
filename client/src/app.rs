@@ -1396,4 +1396,26 @@ mod tests {
         a.handle(Resp::Settled);
         assert!(a.unresolved.is_empty());
     }
+
+    #[test]
+    fn the_start_up_notice_from_a_real_merge_never_contradicts_itself() {
+        let mut b = builtin("pad").expect("pad"); // osu, stream, media
+        b.selected = 0;
+        let mut mine = b.clone();
+        mine.selected = 1; // the editor picks Stream
+        let mut theirs = b.clone();
+        theirs.sets.remove(1); // the pad lost Stream...
+        theirs.selected = 1; // ...and starts on Media
+        let (rec, conflicts) = crate::config::merge3(
+            &b.encode().expect("e"),
+            &mine.encode().expect("e"),
+            &theirs.encode().expect("e"),
+        )
+        .expect("merge");
+        let merged = Config::decode(&rec).expect("decodes");
+        let n = conflict_notice(&b, &merged, &conflicts);
+        assert!(n.contains("the pad starts on Media"), "{n}");
+        assert!(!n.contains("Save would replace"), "{n}");
+        assert!(!n.contains("was removed"), "{n}");
+    }
 }

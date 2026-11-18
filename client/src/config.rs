@@ -555,14 +555,10 @@ pub fn merge3(base: &[u8], mine: &[u8], theirs: &[u8]) -> Result<(Vec<u8>, Vec<u
         rec[SET0 + k.min(SETS - 1) * SET_LEN..][..7].to_vec()
     };
     let (cb, cm, ct) = (chosen(base), chosen(mine), chosen(theirs));
-    let want = if cm != cb {
-        if ct != cb && ct != cm {
-            conflicts.push(STARTUP);
-        }
-        cm.clone()
-    } else {
-        ct.clone()
-    };
+    // Both picked something new: a field conflict, but only if the editor's
+    // pick survives (otherwise the "gone" notice below says what happens).
+    let both_changed = cm != cb && ct != cb && ct != cm;
+    let want = if cm != cb { cm.clone() } else { ct.clone() };
     let at = |id: &[u8]| {
         merged
             .iter()
@@ -570,7 +566,12 @@ pub fn merge3(base: &[u8], mine: &[u8], theirs: &[u8]) -> Result<(Vec<u8>, Vec<u
             .and_then(|k| u8::try_from(k).ok())
     };
     out[STARTUP] = match at(&want) {
-        Some(k) => k,
+        Some(k) => {
+            if both_changed {
+                conflicts.push(STARTUP);
+            }
+            k
+        }
         None => {
             // The chosen set is gone: the pad's surviving choice if any,
             // and say so.
@@ -986,6 +987,10 @@ mod tests {
             "not silently osu"
         );
         assert!(conflicts.contains(&STARTUP_GONE), "{conflicts:?}");
+        assert!(
+            !conflicts.contains(&1351),
+            "never also 'your value wins': {conflicts:?}"
+        );
     }
 
     #[test]

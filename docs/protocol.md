@@ -178,7 +178,7 @@ Staging starts as the stored record (or the running setup if none validates; the
 ### Saving, as the client does it
 
 1. `HELLO` (knock first if there's no answer), then `PUT` the record in 64-byte chunks and `CHECK`.
-2. `COMMIT`. An `ERR` ends the attempt with nothing saved.
+2. `COMMIT`. An `ERR` ends the attempt; it saved nothing, except `E_WRITE` and `E_VERIFY`, after which the record may be in flash (see below).
 3. Close the port, then every 250 ms for up to 12 s look for the same USB serial number, open it, knock and `HELLO`.
 4. Success needs a changed `boot`, mode config, cfg `ok` and the crc of the record sent. Then `EXIT`.
 
