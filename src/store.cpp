@@ -34,13 +34,19 @@ void store_begin() {
 size_t store_read(uint8_t* buf) {
   if (!open_ || !prefs.isKey("cfg")) return 0;
   size_t n = prefs.getBytesLength("cfg");
-  if (n > CFG_SIZE) {
-    // Too long to read: invalid, never "absent" (that would allow autosave
-    // over it). The zeroed buffer fails validation.
+  if (n > CFG_SIZE || n == 0) {
+    // Too long (or unreadable length): invalid, never "absent", which would
+    // allow a save over it. The zeroed buffer fails validation.
+    memset(buf, 0, CFG_SIZE);
+    return n ? n : 1;
+  }
+  if (prefs.getBytes("cfg", buf, n) != n) {
+    // The record is there but couldn't be read: invalid (recovery), not
+    // "absent".
     memset(buf, 0, CFG_SIZE);
     return n;
   }
-  return prefs.getBytes("cfg", buf, n);
+  return n;
 }
 
 uint8_t store_write(const uint8_t* rec) {

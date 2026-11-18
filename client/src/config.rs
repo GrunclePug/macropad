@@ -538,9 +538,35 @@ pub fn merge3(base: &[u8], mine: &[u8], theirs: &[u8]) -> Result<(Vec<u8>, Vec<u
             )
             .collect()
     } else {
-        // Both changed the set list: the editor's list, named.
-        conflicts.push(COUNT);
-        m.iter().map(|(_, s)| s.clone()).collect()
+        // Both changed the set list: the editor's list wins (named, unless
+        // both made the same change), and every set both sides still have
+        // merges field by field, so a pad-side edit to it survives.
+        if ids(&m) != ids(&t) {
+            conflicts.push(COUNT);
+        }
+        m.iter()
+            .enumerate()
+            .map(|(k, (id, ms))| match (find(&b, id), find(&t, id)) {
+                (Some(bs), Some(ts)) => {
+                    let mut o = ts.clone();
+                    for (rel, len, bits) in set_spans() {
+                        merge_field(
+                            &bs,
+                            ms,
+                            &ts,
+                            &mut o,
+                            rel,
+                            SET0 + k * SET_LEN + rel,
+                            len,
+                            bits,
+                            &mut conflicts,
+                        );
+                    }
+                    o
+                }
+                _ => ms.clone(),
+            })
+            .collect()
     };
     out[COUNT..SETS_END].fill(0);
     out[COUNT] = u8::try_from(merged.len()).unwrap_or(0);
@@ -990,6 +1016,29 @@ mod tests {
         assert!(
             !conflicts.contains(&1351),
             "never also 'your value wins': {conflicts:?}"
+        );
+    }
+
+    #[test]
+    fn merge3_keeps_a_pad_edit_when_both_sides_make_the_same_list_change() {
+        let base = vector("default.hex"); // osu, stream, media
+        let mut mine = Config::decode(&base).expect("decode");
+        mine.sets.remove(2); // both delete media
+        let mut theirs = Config::decode(&base).expect("decode");
+        theirs.sets.remove(2);
+        theirs.sets[1].keys[0].label = "PAD".into(); // and the pad edits stream
+        let (out, conflicts) = merge3(
+            &base,
+            &mine.encode().expect("e"),
+            &theirs.encode().expect("e"),
+        )
+        .expect("merge");
+        let m = Config::decode(&out).expect("decodes");
+        assert_eq!(m.sets.len(), 2);
+        assert_eq!(m.sets[1].keys[0].label, "PAD", "the pad's edit survives");
+        assert!(
+            conflicts.is_empty(),
+            "the same change isn't a conflict: {conflicts:?}"
         );
     }
 

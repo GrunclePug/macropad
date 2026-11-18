@@ -528,7 +528,13 @@ impl<P: Ports> State<P> {
                         if h.mode == "config" {
                             let _ = c.exit();
                         }
-                        if h.cfg == "ok" && h.crc.is_some() && h.crc == self.expected_crc {
+                        let on_connect_record =
+                            h.cfg == "ok" && h.crc.is_some() && h.crc == self.expected_crc;
+                        // Or, with no stored record then or now, unchanged.
+                        let still_nothing = h.crc.is_none()
+                            && self.expected_crc.is_none()
+                            && h.cfg == self.connect_cfg;
+                        if on_connect_record || still_nothing {
                             // Restarted on the record read at Connect: no
                             // open Save landed, this one or any earlier one.
                             let c = stored_crc(rec);
@@ -1136,5 +1142,19 @@ mod tests {
         };
         assert!(m.contains("can't confirm"), "{m}");
         assert_eq!(pad.lock().commits, 0);
+    }
+
+    #[test]
+    fn a_fresh_pad_that_restarts_without_the_save_settles_it() {
+        let rec = builtin("pad").expect("pad").encode().expect("encode");
+        let pad = FakePad::new(rec);
+        pad.lock().stored.clear();
+        let (w, s) = connect_to(&pad);
+        pad.lock().lose_commit = true; // OK, restart, still nothing stored
+        w.send(Req::Save(edited(&s.record)));
+        let Resp::Failed(m) = next_raw(&w) else {
+            panic!("expected a plain failure, no Unresolved")
+        };
+        assert!(m.contains("without the new setup"), "{m}");
     }
 }

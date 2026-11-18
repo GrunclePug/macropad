@@ -211,7 +211,7 @@ impl Pad {
                     self.recovery = false;
                 }
                 self.commits += 1;
-                let crc = stored_crc(&self.stored);
+                let crc = stored_crc(&self.staging); // the firmware replies with the committed record's crc
                 self.reply(format!("OK\t{crc:08x}"));
                 if let Some(sn) = self.swap_sn_on_commit.take() {
                     self.sn = sn;
