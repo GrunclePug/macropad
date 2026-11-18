@@ -375,6 +375,30 @@ pub fn err_name(code: u8) -> &'static str {
     }
 }
 
+/// Rebase edits onto a record that changed underneath them: for each byte
+/// past the header, the editor's value where it differs from `base`,
+/// otherwise `theirs`. Returns the merged record and the offsets both sides
+/// changed differently (the editor's value wins there).
+pub fn merge3(base: &[u8], mine: &[u8], theirs: &[u8]) -> Result<(Vec<u8>, Vec<usize>)> {
+    if base.len() != SIZE || mine.len() != SIZE || theirs.len() != SIZE {
+        anyhow::bail!("records of the wrong size");
+    }
+    let mut out = theirs.to_vec();
+    let mut conflicts = Vec::new();
+    for i in 16..SIZE {
+        if mine[i] != base[i] {
+            if theirs[i] != base[i] && theirs[i] != mine[i] {
+                conflicts.push(i);
+            }
+            out[i] = mine[i];
+        }
+    }
+    out[12..16].fill(0);
+    let crc = crc32(&out);
+    out[12..16].copy_from_slice(&crc.to_le_bytes());
+    Ok((out, conflicts))
+}
+
 /// Which field of the record a byte offset belongs to, for error messages.
 pub fn field_at(off: usize) -> String {
     match off {
@@ -474,5 +498,37 @@ mod tests {
             n += 1;
         }
         assert!(n > 40);
+    }
+
+    #[test]
+    fn merge3_keeps_both_sides_changes() {
+        let base = vector("default.hex");
+        let mut mine = Config::decode(&base).expect("decode");
+        mine.release_ms = 9;
+        let mut theirs = Config::decode(&base).expect("decode");
+        theirs.selected = 1;
+        let (out, conflicts) = merge3(
+            &base,
+            &mine.encode().expect("e"),
+            &theirs.encode().expect("e"),
+        )
+        .expect("merge");
+        let m = Config::decode(&out).expect("the merge decodes");
+        assert_eq!((m.release_ms, m.selected), (9, 1));
+        assert!(conflicts.is_empty());
+        let mut clash = Config::decode(&base).expect("decode");
+        clash.release_ms = 11;
+        let (out, conflicts) = merge3(
+            &base,
+            &mine.encode().expect("e"),
+            &clash.encode().expect("e"),
+        )
+        .expect("merge");
+        assert_eq!(
+            Config::decode(&out).expect("decodes").release_ms,
+            9,
+            "the editor wins"
+        );
+        assert_eq!(conflicts, [62]);
     }
 }

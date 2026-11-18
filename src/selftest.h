@@ -20,5 +20,8 @@ void selftest_request_nav_tap();
 // read; TESTACK then removes it.
 void selftest_on_config_entry();
 void selftest_ack_report();
+// The next boot doesn't run the script (TESTERASE norun: a fresh pad the
+// hardware proof edits by hand).
+void selftest_skip_next_run();
 
 }  // namespace mp

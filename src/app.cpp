@@ -108,8 +108,9 @@ void do_test(const char* what) {
   }
   if (!strcmp(what, "tap")) selftest_request_nav_tap();  // after the next leave
   if (!strcmp(what, "ack")) selftest_ack_report();
-  if (!strcmp(what, "erase")) {  // a fresh pad: no record, then restart
+  if (!strncmp(what, "erase", 5)) {  // a fresh pad: no record, then restart
     store_erase();
+    if (!strcmp(what, "erase-norun")) selftest_skip_next_run();
     restart_armed = true;
     restart_at = millis() + 200;
   }

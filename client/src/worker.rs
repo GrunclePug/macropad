@@ -319,7 +319,9 @@ impl<P: Ports> State<P> {
         // fallback, a crash) is fine only on top of that.
         let known = h.crc.is_some() && (h.crc == self.expected_crc || h.crc == self.attempted_crc);
         // A stored record this session didn't read or send: edited on the pad.
-        let changed = h.cfg == "ok" && !known;
+        // Any crc this session doesn't know: a fresh pad whose entry save
+        // failed reports its staged edits' crc while still `cfg none`.
+        let changed = h.crc.is_some() && !known;
         let restarted = h.boot != self.boot;
         // Nothing stored then or now (a fresh pad, or one in recovery), and
         // no change: a restart loses nothing.
@@ -715,6 +717,22 @@ mod tests {
             panic!("not refused")
         };
         assert!(m.contains("isn't plugged in"), "{m}");
+        assert_eq!(pad.lock().commits, 0);
+    }
+
+    #[test]
+    fn a_fresh_pad_with_unsaved_pad_edits_is_not_overwritten() {
+        let rec = builtin("pad").expect("pad").encode().expect("encode");
+        let pad = FakePad::new(rec);
+        pad.lock().stored.clear();
+        let (w, s) = connect_to(&pad);
+        pad.lock().report_crc = Some(0x1234_5678); // its entry save failed
+        w.send(Req::Save(edited(&s.record)));
+        assert!(matches!(next(&w), Resp::Disconnected));
+        let Resp::Failed(m) = next(&w) else {
+            panic!("not refused")
+        };
+        assert!(m.contains("changed since Connect"), "{m}");
         assert_eq!(pad.lock().commits, 0);
     }
 }

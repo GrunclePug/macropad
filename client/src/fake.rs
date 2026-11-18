@@ -33,6 +33,9 @@ pub struct Pad {
     pub away: u32,
     /// Don't restart on COMMIT (a pad that lost power, say).
     pub no_reboot: bool,
+    /// Report this crc in HELLO whatever is stored (a failed entry save:
+    /// the staged edits' crc).
+    pub report_crc: Option<u32>,
     /// Answer PINS with an error (a Connect that fails after HELLO).
     pub fail_pins: bool,
     pub commits: u32,
@@ -54,6 +57,7 @@ impl FakePad {
             away: 0,
             no_reboot: false,
             fail_pins: false,
+            report_crc: None,
             commits: 0,
             out: VecDeque::new(),
         })))
@@ -94,7 +98,7 @@ impl Pad {
     }
 
     fn hello(&mut self) {
-        let (mode, cfg, crc) = if self.recovery {
+        let (mode, cfg, mut crc) = if self.recovery {
             ("recovery", "invalid 4".to_string(), "none".to_string())
         } else if self.stored.is_empty() {
             ("config", "none".to_string(), "none".to_string())
@@ -105,6 +109,9 @@ impl Pad {
                 format!("{:08x}", stored_crc(&self.stored)),
             )
         };
+        if let Some(c) = self.report_crc {
+            crc = format!("{c:08x}");
+        }
         self.reply(format!(
             "OK\tmacropad\t0.3.0\tproto 1\tmode {mode}\tcfg {cfg}\tcrc {crc}\tboot {:08x}",
             self.boot

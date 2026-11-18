@@ -178,6 +178,11 @@ void selftest_begin() {
   if (!p.begin(REPORT_NS, false)) return;
   bool fresh = p.getUChar("fresh", 0) == 1;
   p.putUChar("fresh", 0);
+  if (p.getUChar("norun", 0)) {
+    p.putUChar("norun", 0);
+    pc = DONE;
+    text_printf("selftest: skipped on this boot (TESTERASE norun)");
+  }
   size_t n = p.getBytesLength("report");
   if (fresh && n && n <= sizeof saved && p.getBytes("report", saved, n) == n) {
     saved_len = (uint16_t)n;
@@ -203,6 +208,14 @@ void selftest_on_config_entry() {
     at += len + 1;
   }
   text_printf("selftest: done (send TESTACK once read)");
+}
+
+void selftest_skip_next_run() {
+  Preferences p;
+  if (p.begin(REPORT_NS, false)) {
+    p.putUChar("norun", 1);
+    p.end();
+  }
 }
 
 void selftest_ack_report() {

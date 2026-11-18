@@ -199,7 +199,7 @@ void Proto::handle(char* line, Link& link) {
     if (!strcmp(cmd, "TESTRUN")) env_.test("run");
     if (!strcmp(cmd, "TESTTAP")) env_.test("tap");
     if (!strcmp(cmd, "TESTACK")) env_.test("ack");
-    if (!strcmp(cmd, "TESTERASE")) env_.test("erase");
+    if (!strcmp(cmd, "TESTERASE")) env_.test(n > 1 && !strcmp(f[1], "norun") ? "erase-norun" : "erase");
     return;
   }
   err(link, E_MODE, 0, "unknown command");

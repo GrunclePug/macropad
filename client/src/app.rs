@@ -39,6 +39,11 @@ pub struct App {
     tools: Vec<ToolInfo>,
     pub cfg: Config,
     snapshot: Option<Config>,
+    /// The USB serial number of the pad the snapshot came from: unsaved
+    /// edits carry over a reconnect only to that same pad.
+    snapshot_serial: Option<String>,
+    /// The serial number of the pad a Connect in flight is for.
+    connecting_serial: Option<String>,
     /// The setup a Save in flight sent.
     saving: Option<Config>,
     busy: Option<String>,
@@ -66,6 +71,8 @@ impl App {
             tools: builtin_tools(),
             cfg: builtin("pad").unwrap_or_else(empty_config),
             snapshot: None,
+            snapshot_serial: None,
+            connecting_serial: None,
             saving: None,
             busy: None,
             status: "Plug in the pad, pick its port and press Connect.".into(),
@@ -144,17 +151,9 @@ impl App {
         }
         match Config::decode(&s.record) {
             Ok(c) => {
-                // Edits not yet saved stay in the editor, on top of what the
-                // pad holds now (Revert takes the pad's setup).
-                let unsaved = self.snapshot.as_ref().is_some_and(|old| *old != self.cfg);
-                if unsaved {
-                    self.notice = Some(
-                        "Your unsaved edits are kept. Save to send them, or Revert to take the pad's setup.".into(),
-                    );
-                } else {
-                    self.cfg = c.clone();
-                }
+                self.cfg = self.carry_over(&c);
                 self.snapshot = Some(c);
+                self.snapshot_serial = self.connecting_serial.take();
                 self.error = None;
             }
             Err(e) => {
@@ -192,6 +191,7 @@ impl App {
         self.busy = Some("Connecting".into());
         // Writes stay off until this Connect succeeds.
         self.session = None;
+        self.connecting_serial = p.serial.clone();
         self.worker.send(Req::Connect {
             path: p.path.clone(),
             serial: p.serial.clone(),
@@ -221,6 +221,60 @@ impl App {
             .iter()
             .find(|t| t.kind == kind)
             .map_or_else(|| format!("tool {kind}"), |t| t.name.clone())
+    }
+
+    /// The editor's contents after Connect read `pad`: unsaved edits are
+    /// rebased onto it when this is the same pad (by USB serial number)
+    /// they were made against; otherwise the pad's setup.
+    fn carry_over(&mut self, pad: &Config) -> Config {
+        let same_pad =
+            self.snapshot_serial.is_some() && self.snapshot_serial == self.connecting_serial;
+        let Some(old) = self
+            .snapshot
+            .clone()
+            .filter(|old| same_pad && *old != self.cfg)
+        else {
+            return pad.clone();
+        };
+        if self.cfg == *pad {
+            return pad.clone(); // the edits are what the pad holds (a Save that landed)
+        }
+        let rebased = (|| -> anyhow::Result<(Config, Vec<usize>)> {
+            let (rec, conflicts) =
+                crate::config::merge3(&old.encode()?, &self.cfg.encode()?, &pad.encode()?)?;
+            Ok((Config::decode(&rec)?, conflicts))
+        })();
+        match rebased {
+            Ok((merged, conflicts)) if conflicts.is_empty() => {
+                self.notice = Some(
+                    "Your unsaved edits are kept, on top of the pad's current setup. Save to send them, or Revert."
+                        .into(),
+                );
+                merged
+            }
+            Ok((merged, conflicts)) => {
+                let fields: Vec<String> = conflicts
+                    .iter()
+                    .map(|&o| crate::config::field_at(o))
+                    .collect();
+                let mut fields = fields;
+                fields.dedup();
+                self.notice = Some(format!(
+                    "Your unsaved edits are kept on top of the pad's current setup, but the pad also changed {}: \
+                     Save would replace those with your values.",
+                    fields.join(", ")
+                ));
+                merged
+            }
+            Err(_) => {
+                self.notice = Some(
+                    "Your unsaved edits are kept as they were; the pad's setup changed too, and Save would replace it. \
+                     Revert to take the pad's setup."
+                        .into(),
+                );
+                self.cfg.clone()
+            }
+        }
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui) {
@@ -981,14 +1035,22 @@ mod tests {
             tools: builtin_tools(),
             record: other.encode().expect("encode"),
         };
-        a.on_connect(session);
+        a.snapshot_serial = Some("A".into());
+        a.connecting_serial = Some("A".into());
+        a.on_connect(session.clone());
         assert_eq!(a.cfg.release_ms, 9, "the edit survives");
-        assert_eq!(
-            a.snapshot.as_ref().expect("snapshot").selected,
-            1,
-            "the snapshot is the pad's"
-        );
+        assert_eq!(a.cfg.selected, 1, "and so does the pad's own change");
+        assert_eq!(a.snapshot.as_ref().expect("snapshot").selected, 1);
         assert!(a.notice.is_some());
+
+        // Another pad: nothing carries over.
+        a.snapshot = Some(pad.clone());
+        a.cfg = pad.clone();
+        a.cfg.release_ms = 9;
+        a.snapshot_serial = Some("A".into());
+        a.connecting_serial = Some("B".into());
+        a.on_connect(session);
+        assert_eq!(a.cfg, other, "a different pad shows its own setup");
     }
 
     #[test]
