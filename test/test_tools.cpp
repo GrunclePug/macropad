@@ -88,7 +88,7 @@ TEST(autoclicker_skips_a_click_that_fell_due_mid_click) {
       if (b && up_at) next_down = now;
     }
   }
-  CHECK(up_at && next_down - up_at >= 40);
+  CHECK(up_at && next_down > up_at && next_down - up_at >= 40);
 }
 
 TEST(jitter_edit_mid_cycle_still_returns) {

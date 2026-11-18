@@ -201,7 +201,6 @@ void selftest_step(uint32_t now) {
       check("latency p99 <= 1 ms (pin to report accepted)", nlat && p99() <= 1000);
       check("no loop gap over 2 ms", stats.gaps_over_2ms == 0);
       check("every chord in one report", chord_ok == 20 && chord_split == 0);
-      check("no modifier ever sent", mods_seen == 0);
       check("tools still running after the trials", core.active(click) && core.active(jit));
       check("autoclicker clicked during the trials", ((Autoclicker*)VARIANT.tools[click])->clicks > 10);
 
@@ -323,7 +322,14 @@ void selftest_step(uint32_t now) {
       WAIT(100);
       TAP(KILL);
       check("clean up: nothing held", hid.sent_buttons() == 0 && hid.sent_keys().empty());
+      check("no modifier ever sent", mods_seen == 0);
       display_service(core, now, true);
+      // The serial port went away with the USB test: wait for the host to
+      // reopen it, so the one-time frame dump isn't lost.
+      for (i = 0; i < 600 && !Serial; i++) {
+        WAIT(100);
+      }
+      WAIT(500);
       report();
       Serial.println("--- last frame (for a human to look at) ---");
       display_dump();

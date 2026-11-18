@@ -70,7 +70,7 @@ A key held through a screen change does nothing until it's released and pressed 
 | --- | --- | --- | --- |
 | `VARIANT` | `make VARIANT=...` | `pad` | Pad to build: `pad` or `deck` |
 | `PORT` | `make upload PORT=...` | none | The board's serial device; use the real device (`/dev/ttyACM0`), not a `/dev/serial/by-id/` link |
-| `SELFTEST` | `make SELFTEST=1 ...` | unset | Build the on-device self-test instead of the normal firmware |
+| `SELFTEST` | `make SELFTEST=1 ...` | unset | Build the on-device self-test instead of the normal firmware (`pad` only) |
 
 ## Variants
 
