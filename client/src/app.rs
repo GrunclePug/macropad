@@ -862,7 +862,10 @@ fn conflict_notice(base: &Config, merged: &Config, conflicts: &[usize]) -> Strin
     use crate::config::{DROPPED_SET, STARTUP_GONE};
     let mut parts =
         vec!["Your unsaved edits are kept on top of the pad's current setup".to_string()];
-    for &o in conflicts.iter().filter(|&&o| o >= DROPPED_SET) {
+    for &o in conflicts
+        .iter()
+        .filter(|&&o| (DROPPED_SET..STARTUP_GONE).contains(&o))
+    {
         let name = base
             .sets
             .get(o - DROPPED_SET)
@@ -877,7 +880,7 @@ fn conflict_notice(base: &Config, merged: &Config, conflicts: &[usize]) -> Strin
             .get(usize::from(merged.selected))
             .map_or("the first set", |s| s.name.as_str());
         parts.push(format!(
-            "the start-up set you picked is gone, so the pad starts on {name}"
+            "the start-up set is gone, so the pad starts on {name}"
         ));
     }
     if conflicts.contains(&67) {
@@ -886,7 +889,6 @@ fn conflict_notice(base: &Config, merged: &Config, conflicts: &[usize]) -> Strin
     let mut fields: Vec<String> = conflicts
         .iter()
         .filter(|&&o| o < DROPPED_SET && o != 67)
-        .filter(|&&o| o != STARTUP_GONE)
         .map(|&o| crate::config::field_at(o))
         .collect();
     fields.dedup();
@@ -1377,9 +1379,10 @@ mod tests {
         merged.selected = 2; // Media
         let n = conflict_notice(&base, &merged, &[crate::config::STARTUP_GONE]);
         assert!(
-            n.contains("the start-up set you picked is gone, so the pad starts on Media"),
+            n.contains("the start-up set is gone, so the pad starts on Media"),
             "{n}"
         );
+        assert!(!n.contains("was removed"), "no set was removed: {n}");
         assert!(!n.contains("Save would replace"), "{n}");
     }
 

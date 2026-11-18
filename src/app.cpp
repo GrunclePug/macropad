@@ -64,8 +64,8 @@ void stage_default() {
   config_encode(d, env.staging);
 }
 
-// HELLO's crc from what flash holds now, read back (after an E_VERIFY the
-// write happened but its read-back differed, so RAM can't be trusted).
+// HELLO's crc from what flash holds now, read back (after an E_WRITE or
+// E_VERIFY the write may have happened, so RAM can't be trusted).
 // `rec`/`n`: the record just read back from flash.
 void crc_from_flash(const uint8_t* rec, size_t n) {
   env.has_crc = n == CFG_SIZE && !config_validate(rec, n).code;
