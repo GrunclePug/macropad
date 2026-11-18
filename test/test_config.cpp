@@ -104,49 +104,77 @@ TEST(boot_rows_and_overlaps) {
   CHECK(!d.use_blob && !d.persist);
 }
 
-// Every row of the flash decisions (after a failed write, at config entry).
+// The flash decisions (after a failed write, at config entry): invariants
+// over every input, then the rows the design depends on.
 TEST(flash_decisions) {
   const Flash all[] = {Flash::None, Flash::Unreadable, Flash::Valid, Flash::Exact};
+  const FlashState states[] = {{false, false}, {true, false}, {false, true}, {true, true}};
   for (Flash f : all)
-    for (int verified = 0; verified < 2; verified++)
+    for (FlashState st : states) {
+      bool valid = f == Flash::Valid || f == Flash::Exact;
       for (int flush = 0; flush < 2; flush++) {
-        FlashView v = after_failed_write(f, verified, flush);
+        FlashView v = after_failed_write(f, st, flush);
         CHECK(v.landed == (f == Flash::Exact));
-        CHECK(!(v.landed && v.fault));
         if (v.fault) CHECK(v.crc == CrcFrom::None);
         if (!flush) CHECK(v.crc != CrcFrom::Staged);
+        if (st.faulted) CHECK(v.fault);  // a fault stands until a restart
+        CHECK(v.state.faulted == (st.faulted || v.fault));
+        CHECK(v.state.verified == (st.verified || valid));  // a valid read counts
       }
+      FlashView v = at_entry(f, st);
+      CHECK(!v.landed);
+      if (st.faulted) CHECK(v.fault);
+      CHECK(v.state.faulted == (st.faulted || v.fault));
+      CHECK(v.state.verified == (st.verified || valid));
+    }
+  const FlashState fresh = {false, false}, seen = {true, false}, faulted = {true, true};
   FlashView v;
-  // The entry flush failed, the old record intact: its edits' crc (9s).
-  v = after_failed_write(Flash::Valid, true, true);
-  CHECK(!v.landed && !v.fault && v.crc == CrcFrom::Staged);
-  // A fresh pad's entry flush failed, nothing stored: the same.
-  v = after_failed_write(Flash::None, false, true);
+  // The entry flush failed, the old record intact: its edits' crc (9s), and
+  // the old record counts as verified from now on.
+  v = after_failed_write(Flash::Valid, fresh, true);
+  CHECK(!v.landed && !v.fault && v.crc == CrcFrom::Staged && v.state.verified);
+  // A fresh pad's entry flush failed, nothing stored: the edits' crc too.
+  v = after_failed_write(Flash::None, fresh, true);
   CHECK(!v.fault && v.crc == CrcFrom::Staged);
   // A verified record gone, after a flush or a commit: a fault.
-  CHECK(after_failed_write(Flash::None, true, true).fault);
-  CHECK(after_failed_write(Flash::None, true, false).fault);
+  CHECK(after_failed_write(Flash::None, seen, true).fault);
+  CHECK(after_failed_write(Flash::None, seen, false).fault);
   // Unreadable after any failed write: a fault.
-  CHECK(after_failed_write(Flash::Unreadable, false, false).fault);
-  CHECK(after_failed_write(Flash::Unreadable, false, true).fault);
+  CHECK(after_failed_write(Flash::Unreadable, fresh, false).fault);
+  CHECK(after_failed_write(Flash::Unreadable, fresh, true).fault);
   // A commit that failed with the old record intact: its crc.
-  v = after_failed_write(Flash::Valid, true, false);
+  v = after_failed_write(Flash::Valid, seen, false);
   CHECK(!v.fault && v.crc == CrcFrom::Stored);
   // A fresh pad's commit that failed, nothing stored: no crc, no fault.
-  v = after_failed_write(Flash::None, false, false);
+  v = after_failed_write(Flash::None, fresh, false);
   CHECK(!v.fault && v.crc == CrcFrom::None);
   // The write landed after all.
-  v = after_failed_write(Flash::Exact, false, true);
-  CHECK(v.landed && v.crc == CrcFrom::Stored);
+  v = after_failed_write(Flash::Exact, fresh, true);
+  CHECK(v.landed && !v.fault && v.crc == CrcFrom::Stored);
 
   // Config entry.
-  for (int verified = 0; verified < 2; verified++) {
-    CHECK(at_entry(Flash::Valid, verified).crc == CrcFrom::Stored);
-    CHECK(!at_entry(Flash::Valid, verified).fault);
-    CHECK(at_entry(Flash::None, verified).fault == bool(verified));
-    CHECK(at_entry(Flash::Unreadable, verified).fault == bool(verified));
-    CHECK(at_entry(Flash::None, verified).crc == CrcFrom::None);
-  }
+  CHECK(at_entry(Flash::Valid, fresh).crc == CrcFrom::Stored && !at_entry(Flash::Valid, fresh).fault);
+  CHECK(at_entry(Flash::Valid, seen).crc == CrcFrom::Stored && !at_entry(Flash::Valid, seen).fault);
+  // Gone or unreadable after a verified record: a fault.
+  CHECK(at_entry(Flash::None, seen).fault && at_entry(Flash::Unreadable, seen).fault);
+  // Nothing ever stored, or a safe or crash boot on an invalid record: no
+  // crc, no fault, the boot row stands.
+  v = at_entry(Flash::None, fresh);
+  CHECK(!v.fault && v.crc == CrcFrom::None);
+  v = at_entry(Flash::Unreadable, fresh);
+  CHECK(!v.fault && v.crc == CrcFrom::None);
+  // After a fault, a read that works again doesn't clear it (the repair is
+  // a restart): failed flush, unreadable read-back, EXIT, a valid old record.
+  v = after_failed_write(Flash::Unreadable, seen, true);
+  CHECK(v.fault);
+  v = at_entry(Flash::Valid, v.state);
+  CHECK(v.fault && v.crc == CrcFrom::None);
+  CHECK(at_entry(Flash::Valid, faulted).fault);
+  // A valid old record seen during a failed flush, then gone before a failed
+  // commit's read-back: a fault, not "nothing stored".
+  v = after_failed_write(Flash::Valid, fresh, true);
+  v = after_failed_write(Flash::None, v.state, false);
+  CHECK(v.fault);
 }
 
 TEST(knock_pattern) {

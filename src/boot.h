@@ -34,18 +34,25 @@ enum class Flash : uint8_t { None, Unreadable, Valid, Exact };
 // record (pad-side edits that a failed flush couldn't store).
 enum class CrcFrom : uint8_t { None, Stored, Staged };
 
+// What this boot has seen of flash. Both only ever turn on; a restart clears
+// them.
+struct FlashState {
+  bool verified;  // flash has held a validated record
+  bool faulted;   // a flash fault was reported: it stands until a restart
+};
+
 struct FlashView {
   bool landed;  // the failed write is in flash after all
   CrcFrom crc;
-  bool fault;  // flash fault: `cfg ok`, `crc none`, no pad-side saves
+  bool fault;        // flash fault: `cfg ok`, `crc none`, no pad-side saves
+  FlashState state;  // the state after this read
 };
 
 // After a write that failed (E_WRITE or E_VERIFY), from one read-back.
-// `verified`: flash held a verified record before. `flush`: the entry flush
-// of pad-side edits (a COMMIT otherwise).
-FlashView after_failed_write(Flash back, bool verified, bool flush);
+// `flush`: the entry flush of pad-side edits (a COMMIT otherwise).
+FlashView after_failed_write(Flash back, FlashState st, bool flush);
 // At config entry, from the read that stages (nothing to flush, or the
 // flush landed).
-FlashView at_entry(Flash read, bool verified);
+FlashView at_entry(Flash read, FlashState st);
 
 }  // namespace mp

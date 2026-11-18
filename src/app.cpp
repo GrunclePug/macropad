@@ -64,8 +64,9 @@ void stage_default() {
   config_encode(d, env.staging);
 }
 
-// Flash held a verified record at the last look (boot, a save, a read).
-bool verified = false;
+// What this boot has seen of flash (see FlashState): set at boot, by a
+// save, and by every read; never cleared before a restart.
+FlashState flash_state = {false, false};
 
 // Flash no longer holds what it should (unreadable, or a verified record
 // gone): `cfg ok` with `crc none` (whatever the boot row), which the client
@@ -89,6 +90,7 @@ Flash classify(const uint8_t* rec, size_t n, const uint8_t* want) {
 // HELLO's crc from a decision. `stored`: the record read from flash;
 // `staged`: the staged record.
 void apply(const FlashView& v, const uint8_t* stored, const uint8_t* staged) {
+  flash_state = v.state;
   if (v.fault) {
     flash_fault();
     return;
@@ -99,7 +101,6 @@ void apply(const FlashView& v, const uint8_t* stored, const uint8_t* staged) {
       env.stored_crc = 0;
       break;
     case CrcFrom::Stored:
-      verified = true;
       env.has_crc = true;
       env.stored_crc = config_crc(stored);
       if (!strcmp(cfg_status, "none")) strcpy(cfg_status, "ok");
@@ -120,7 +121,7 @@ uint8_t do_commit(const uint8_t* rec) {
     // after the new blob was already written.
     static uint8_t again[CFG_SIZE];
     size_t n = store_read(again);
-    FlashView v = after_failed_write(classify(again, n, rec), verified, false);
+    FlashView v = after_failed_write(classify(again, n, rec), flash_state, false);
     if (v.landed)
       r = E_OK;
     else if (!core.recovery())
@@ -182,7 +183,7 @@ void do_test(const char* what) {
 // HELLO reports the stored record's crc: keep it current after pad-side saves.
 // From the record store_write() just verified, not a second read.
 void note_stored() {
-  verified = true;
+  flash_state.verified = true;
   env.has_crc = true;
   env.stored_crc = store_saved_crc();
   // A fresh pad's first save creates the record (pad-side saves only run on
@@ -212,7 +213,7 @@ void enter_config(bool recovery, bool by_knock = false) {
     } else {
       static uint8_t back[CFG_SIZE];
       size_t m = store_read(back);
-      FlashView v = after_failed_write(classify(back, m, env.staging), verified, true);
+      FlashView v = after_failed_write(classify(back, m, env.staging), flash_state, true);
       apply(v, back, env.staging);
       if (!v.landed) return;  // staging stays the running config
       core.clean();
@@ -226,7 +227,7 @@ void enter_config(bool recovery, bool by_knock = false) {
   // When it's the stored record, HELLO reports exactly its crc, so what a
   // client reads and the crc it's told always agree.
   size_t n = store_read(env.staging);
-  FlashView v = at_entry(classify(env.staging, n, nullptr), verified);
+  FlashView v = at_entry(classify(env.staging, n, nullptr), flash_state);
   if (v.crc != CrcFrom::Stored) config_encode(cfg, env.staging);
   apply(v, env.staging, nullptr);
 }
@@ -373,7 +374,7 @@ void app_setup() {
   env.nonce = nonce;
   env.cfg_status = cfg_status;
   env.has_crc = valid;
-  verified = valid;
+  flash_state = {valid, false};
   env.stored_crc = valid ? config_crc(blob) : 0;
   env.commit = do_commit;
   env.exit = do_exit;

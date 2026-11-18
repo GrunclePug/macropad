@@ -16,28 +16,37 @@ BootDecision boot_decide(const BootInput& in) {
   }
 }
 
-FlashView after_failed_write(Flash back, bool verified, bool flush) {
-  CrcFrom kept = flush ? CrcFrom::Staged : CrcFrom::Stored;
+namespace {
+
+bool valid(Flash f) { return f == Flash::Valid || f == Flash::Exact; }
+
+FlashView view(bool landed, CrcFrom crc, bool fault, Flash f, FlashState st) {
+  if (fault) crc = CrcFrom::None;
+  return {landed, crc, fault, {st.verified || valid(f), st.faulted || fault}};
+}
+
+}  // namespace
+
+FlashView after_failed_write(Flash back, FlashState st, bool flush) {
   switch (back) {
-    case Flash::Exact:
-      return {true, CrcFrom::Stored, false};
+    case Flash::Exact:  // landed: a COMMIT restarts, a flush counts as saved
+      return view(true, CrcFrom::Stored, st.faulted, back, st);
     case Flash::Unreadable:
-      return {false, CrcFrom::None, true};
+      return view(false, CrcFrom::None, true, back, st);
     case Flash::None:  // a verified record gone is a fault; else nothing landed
-      if (verified) return {false, CrcFrom::None, true};
-      return {false, flush ? CrcFrom::Staged : CrcFrom::None, false};
+      return view(false, flush ? CrcFrom::Staged : CrcFrom::None, st.verified || st.faulted, back, st);
     case Flash::Valid:  // the old record: a flush keeps reporting its edits
     default:
-      return {false, kept, false};
+      return view(false, flush ? CrcFrom::Staged : CrcFrom::Stored, st.faulted, back, st);
   }
 }
 
-FlashView at_entry(Flash read, bool verified) {
-  if (read == Flash::Valid || read == Flash::Exact) return {false, CrcFrom::Stored, false};
+FlashView at_entry(Flash read, FlashState st) {
+  if (valid(read)) return view(false, CrcFrom::Stored, st.faulted, read, st);
   // Unreadable or gone: a fault if flash held a verified record; otherwise
   // (nothing ever stored, or a safe or crash boot on an invalid record) no
   // crc, and the boot row stands.
-  return {false, CrcFrom::None, verified};
+  return view(false, CrcFrom::None, st.verified || st.faulted, read, st);
 }
 
 }  // namespace mp

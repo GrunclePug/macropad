@@ -302,17 +302,71 @@ pub fn builtin(name: &str) -> Option<Config> {
     Config::decode(&rec).ok()
 }
 
-/// Write a file atomically: a temporary file, then a rename.
+/// Write a file atomically: a new temporary file beside it (created
+/// exclusively, so it never overwrites another file), then a rename.
 pub fn write_file(path: &std::path::Path, text: &str) -> Result<()> {
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, text).with_context(|| format!("write {}", tmp.display()))?;
-    std::fs::rename(&tmp, path).with_context(|| format!("rename to {}", path.display()))?;
-    Ok(())
+    use std::io::Write;
+    let dir = path.parent().filter(|d| !d.as_os_str().is_empty());
+    let name = path
+        .file_name()
+        .with_context(|| format!("{} names no file", path.display()))?;
+    for n in 0..100 {
+        let mut tmp_name = std::ffi::OsString::from(".");
+        tmp_name.push(name);
+        tmp_name.push(format!(".{}-{n}.tmp", std::process::id()));
+        let tmp = dir.map_or_else(|| tmp_name.clone().into(), |d| d.join(&tmp_name));
+        let mut f = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+        {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e).with_context(|| format!("create {}", tmp.display())),
+        };
+        let done = f
+            .write_all(text.as_bytes())
+            .and_then(|()| f.sync_all())
+            .with_context(|| format!("write {}", tmp.display()))
+            .and_then(|()| {
+                std::fs::rename(&tmp, path).with_context(|| format!("rename to {}", path.display()))
+            });
+        if done.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        return done;
+    }
+    anyhow::bail!("no free temporary name beside {}", path.display())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn writing_leaves_other_files_alone() {
+        let dir = std::env::temp_dir().join(format!("macropad-write-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let other = dir.join("pad.tmp");
+        std::fs::write(&other, "someone else's").expect("write");
+        write_file(&dir.join("pad.toml"), "new").expect("write pad.toml");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("pad.toml")).expect("read"),
+            "new"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&other).expect("read"),
+            "someone else's"
+        );
+        write_file(&other, "into pad.tmp").expect("write pad.tmp");
+        assert_eq!(
+            std::fs::read_to_string(&other).expect("read"),
+            "into pad.tmp"
+        );
+        let left: Vec<_> = std::fs::read_dir(&dir).expect("ls").collect();
+        assert_eq!(left.len(), 2, "no temporary file left behind");
+        std::fs::remove_dir_all(&dir).expect("clean up");
+    }
 
     #[test]
     fn presets_round_trip_through_toml() {

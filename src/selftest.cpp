@@ -139,6 +139,13 @@ void rep(const char* fmt, ...) {
 }
 
 int cleanup_state[7] = {-1, -1, -1, -1, -1, -1, -1};
+int cleanup_holds = 0;  // killswitch holds the clean-up had to repeat
+
+bool any_enabled() {
+  for (uint8_t k = 0; k < core.variant().ntools; k++)
+    if (core.enabled(k)) return true;
+  return false;
+}
 
 void report() {
   sort_latency();  // the abort path reaches here without the trials' sort
@@ -152,8 +159,9 @@ void report() {
     rep("latency_us n=%d min=%lu p50=%lu p99=%lu max=%lu", nlat, (unsigned long)lat[0],
                 (unsigned long)lat[nlat / 2], (unsigned long)p99(), (unsigned long)lat[nlat - 1]);
   rep("chords ok=%d split=%d", chord_ok, chord_split);
-  rep("cleanup screen=%d set=%d menu=%d cursor=%d buttons=%x keys=%d killed=%d", cleanup_state[0], cleanup_state[1],
-      cleanup_state[2], cleanup_state[3], cleanup_state[4], cleanup_state[5], cleanup_state[6]);
+  rep("cleanup screen=%d set=%d menu=%d cursor=%d buttons=%x keys=%d killed=%d repeated_holds=%d", cleanup_state[0],
+      cleanup_state[1], cleanup_state[2], cleanup_state[3], cleanup_state[4], cleanup_state[5], cleanup_state[6],
+      cleanup_holds);
   rep("kb_reports=%lu mods_seen=%lu f17_reports=%lu", (unsigned long)kb_reports,
               (unsigned long)mods_seen, (unsigned long)f17_reports);
   rep("loop max_gap_us=%lu gaps_over_2ms=%lu loops=%lu", (unsigned long)stats.max_gap_us,
@@ -246,6 +254,7 @@ void selftest_restart() {
   nlat = 0;
   lat_pending = chord_pending = false;
   chord_ok = chord_split = 0;
+  cleanup_holds = 0;
   kb_reports = mods_seen = f17_reports = f13_reports = 0;
   stats.measuring = false;
   stats.max_gap_us = stats.gaps_over_2ms = stats.loops = 0;
@@ -496,10 +505,16 @@ void selftest_step(uint32_t now) {
       check("a tap resumes it", !core.killed() && core.active(3) && (hid.sent_buttons() & 0x80));
 
       // --- Clean up: everything off, back on osu ---
-      PRESS(KILL);
-      WAIT(800);
-      LIFT(KILL);
-      WAIT(100);
+      // A link change during the hold (the host may suspend the pad after the
+      // reconnect above) discards it, by design: hold again until it took.
+      for (j = 0; j < 4; j++) {
+        PRESS(KILL);
+        WAIT(800);
+        LIFT(KILL);
+        WAIT(100);
+        if (!any_enabled()) break;
+        cleanup_holds++;
+      }
       TAP(KILL);
       HOLD(NAV);
       // Up to Keys, however many menu items there are (Configure is last).
