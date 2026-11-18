@@ -190,15 +190,19 @@ impl App {
             self.worker.send(Req::Disconnect);
             return;
         }
-        match Config::decode(&s.record) {
+        let kept_editor = match Config::decode(&s.record) {
             Ok(c) => {
-                // Recovery or no stored record: the pad serves its compiled
-                // default, not a setup of its own.
-                let usable = s.hello.mode != "recovery" && s.hello.cfg != "none";
-                self.cfg = self.carry_over(&c, usable);
+                // A crc means GET served a stored, validated record (or the
+                // pad's staged edits). Without one (recovery, nothing
+                // stored, unreadable, or a safe or crash boot on any of
+                // those) the pad serves its compiled default.
+                let usable = s.hello.crc.is_some();
+                let (cfg, kept) = self.carry_over(&c, usable);
+                self.cfg = cfg;
                 self.snapshot = Some(c);
                 self.snapshot_serial = self.connecting_serial.take();
                 self.error = None;
+                kept
             }
             Err(e) => {
                 // No session: Save stays off rather than sending the editor's
@@ -207,11 +211,16 @@ impl App {
                 self.worker.send(Req::Disconnect);
                 return;
             }
-        }
+        };
         self.tools = s.tools.clone();
         self.status = if s.hello.mode == "recovery" {
+            let next = if kept_editor {
+                "Save to restore the editor's setup"
+            } else {
+                "Load a preset, then Save"
+            };
             format!(
-                "Recovery: the pad's saved setup is unusable ({}). Load a preset, then Save.",
+                "Recovery: the pad's saved setup is unusable ({}). {next}.",
                 s.hello.cfg
             )
         } else {
@@ -271,8 +280,8 @@ impl App {
     /// rebased onto it when this is the same pad (by USB serial number)
     /// they were made against; otherwise the pad's setup. A pad with no
     /// usable stored setup (`usable` false) that this app read before keeps
-    /// the editor's contents, so a Save restores them.
-    fn carry_over(&mut self, pad: &Config, usable: bool) -> Config {
+    /// the editor's contents, so a Save restores them (`true` returned).
+    fn carry_over(&mut self, pad: &Config, usable: bool) -> (Config, bool) {
         let same_pad =
             self.snapshot_serial.is_some() && self.snapshot_serial == self.connecting_serial;
         // A Save whose outcome was unclear and which the pad now holds landed:
@@ -288,17 +297,17 @@ impl App {
                 "The pad has no usable saved setup; the editor keeps yours. Save to restore it."
                     .into(),
             );
-            return self.cfg.clone();
+            return (self.cfg.clone(), true);
         }
         let unsaved = self.snapshot.as_ref().is_some_and(|old| *old != self.cfg);
         let Some(old) = self.snapshot.clone().filter(|_| same_pad && unsaved) else {
             if unsaved {
                 self.notice = Some("Unsaved edits made for another pad were discarded.".into());
             }
-            return pad.clone();
+            return (pad.clone(), false);
         };
         if self.cfg == *pad {
-            return pad.clone(); // the edits are what the pad holds (a Save that landed)
+            return (pad.clone(), false); // the edits are what the pad holds (a Save that landed)
         }
         let rebased = (|| -> anyhow::Result<(Config, Vec<usize>)> {
             let (rec, conflicts) =
@@ -311,11 +320,11 @@ impl App {
                     "Your unsaved edits are kept, on top of the pad's current setup. Save to send them, or Revert."
                         .into(),
                 );
-                merged
+                (merged, false)
             }
             Ok((merged, conflicts)) => {
                 self.notice = Some(conflict_notice(&old, &merged, &conflicts));
-                merged
+                (merged, false)
             }
             Err(_) => {
                 self.notice = Some(
@@ -323,7 +332,7 @@ impl App {
                      Revert to take the pad's setup."
                         .into(),
                 );
-                self.cfg.clone()
+                (self.cfg.clone(), false)
             }
         }
     }
@@ -1129,7 +1138,7 @@ mod tests {
                 fw: "0.3.0".into(),
                 mode: "config".into(),
                 cfg: "ok".into(),
-                crc: None,
+                crc: Some(1),
                 boot: 1,
                 sn: None,
             },
@@ -1199,6 +1208,13 @@ mod tests {
         assert_eq!(a.cfg.release_ms, 9, "edits stay too");
         assert_eq!(a.cfg.selected, pad.selected);
 
+        // A crash reset on a pad with nothing readable: the default again.
+        session.hello.cfg = "default crash".into();
+        a.cfg = pad.clone();
+        a.connecting_serial = Some("A".into());
+        a.on_connect(session.clone());
+        assert_eq!(a.cfg, pad, "a crash or safe boot keeps the editor too");
+
         // Another pad in recovery shows its own setup.
         a.connecting_serial = Some("B".into());
         a.on_connect(session);
@@ -1228,7 +1244,7 @@ mod tests {
                 fw: "0.3.0".into(),
                 mode: "config".into(),
                 cfg: "ok".into(),
-                crc: None,
+                crc: Some(1),
                 boot: 1,
                 sn: None,
             },
@@ -1300,7 +1316,7 @@ mod tests {
                 fw: "0.3.0".into(),
                 mode: "config".into(),
                 cfg: "ok".into(),
-                crc: None,
+                crc: Some(1),
                 boot: 2,
                 sn: None,
             },
@@ -1369,7 +1385,7 @@ mod tests {
                 fw: "0.3.0".into(),
                 mode: "config".into(),
                 cfg: "ok".into(),
-                crc: None,
+                crc: Some(1),
                 boot: 3,
                 sn: None,
             },
@@ -1409,7 +1425,7 @@ mod tests {
                 fw: "0.3.0".into(),
                 mode: "config".into(),
                 cfg: "ok".into(),
-                crc: None,
+                crc: Some(1),
                 boot: 4,
                 sn: None,
             },

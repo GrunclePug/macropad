@@ -49,6 +49,8 @@ size_t stored_length() {
 }
 
 size_t store_read(uint8_t* buf) {
+  // Preferences didn't open: reads as none, harmlessly, since every write
+  // fails too (E_WRITE).
   if (!open_) return 0;
   size_t n = stored_length();
   if (n == 0) return 0;
