@@ -76,7 +76,16 @@ void crc_from_flash() {
 
 uint8_t do_commit(const uint8_t* rec) {
   uint8_t r = store_write(rec);
-  if (r == E_VERIFY) crc_from_flash();
+  if (r == E_VERIFY) {
+    // Read back once more: if flash does hold exactly this record, the save
+    // happened, and it ends the normal way (OK and a restart).
+    static uint8_t again[CFG_SIZE];
+    if (store_read(again) == CFG_SIZE && !memcmp(again, rec, CFG_SIZE)) {
+      r = E_OK;
+    } else if (!core.recovery()) {
+      crc_from_flash();  // recovery keeps reporting no stored record
+    }
+  }
   if (r == E_OK) {
     core.freeze();  // terminal: no dispatch, no pad input until the restart
     restart_armed = true;

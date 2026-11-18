@@ -472,6 +472,16 @@ pub fn merge3(base: &[u8], mine: &[u8], theirs: &[u8]) -> Result<(Vec<u8>, Vec<u
             .collect()
     };
     let (b, m, t) = (sets(base), sets(mine), sets(theirs));
+    // Ids must be unique on each side (a draft can hold a duplicate while
+    // being renamed): otherwise lookups by id are ambiguous. The caller
+    // keeps the editor's draft unmerged.
+    for side in [&b, &m, &t] {
+        let mut ids: Vec<&Vec<u8>> = side.iter().map(|(id, _)| id).collect();
+        ids.sort();
+        if ids.windows(2).any(|w| w[0] == w[1]) {
+            anyhow::bail!("duplicate key set ids: can't merge by set");
+        }
+    }
     let ids = |v: &[(Vec<u8>, Vec<u8>)]| v.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>();
     let find = |v: &[(Vec<u8>, Vec<u8>)], id: &[u8]| {
         v.iter().find(|(i, _)| i == id).map(|(_, s)| s.clone())
@@ -538,15 +548,25 @@ pub fn merge3(base: &[u8], mine: &[u8], theirs: &[u8]) -> Result<(Vec<u8>, Vec<u
         if ct != cb && ct != cm {
             conflicts.push(STARTUP);
         }
-        cm
+        cm.clone()
     } else {
-        ct
+        ct.clone()
     };
-    out[STARTUP] = merged
-        .iter()
-        .position(|s| s[..7] == want[..])
-        .and_then(|k| u8::try_from(k).ok())
-        .unwrap_or(0);
+    let at = |id: &[u8]| {
+        merged
+            .iter()
+            .position(|s| s[..7] == id[..])
+            .and_then(|k| u8::try_from(k).ok())
+    };
+    out[STARTUP] = match at(&want) {
+        Some(k) => k,
+        None => {
+            // The chosen set is gone: the pad's surviving choice if any,
+            // and say so.
+            conflicts.push(STARTUP);
+            at(&ct).or_else(|| at(&cm)).unwrap_or(0)
+        }
+    };
 
     out[12..16].fill(0);
     let crc = crc32(&out);
@@ -913,6 +933,48 @@ mod tests {
             conflicts.contains(&67),
             "the lost edit is named: {conflicts:?}"
         );
+    }
+
+    #[test]
+    fn merge3_refuses_duplicate_ids() {
+        let base = vector("default.hex");
+        let mut mine = Config::decode(&base).expect("decode");
+        mine.sets[1].id = "osu".into(); // renaming stream: briefly two osu sets
+        let mut theirs = Config::decode(&base).expect("decode");
+        theirs.sets[0].flags ^= SET_LIVE;
+        assert!(
+            merge3(
+                &base,
+                &mine.encode().expect("e"),
+                &theirs.encode().expect("e")
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn merge3_keeps_a_surviving_start_up_set_when_the_chosen_one_is_gone() {
+        let mut b = Config::decode(&vector("default.hex")).expect("decode"); // osu, stream, media
+        b.selected = 2; // media
+        let base = b.encode().expect("encode");
+        let mut mine = Config::decode(&base).expect("decode");
+        mine.selected = 1; // the editor picks stream
+        let mut theirs = Config::decode(&base).expect("decode");
+        theirs.sets.remove(1); // a push deleted stream; media is still start-up
+        theirs.selected = 1;
+        let (out, conflicts) = merge3(
+            &base,
+            &mine.encode().expect("e"),
+            &theirs.encode().expect("e"),
+        )
+        .expect("merge");
+        let m = Config::decode(&out).expect("decodes");
+        assert_eq!(
+            m.sets[usize::from(m.selected)].id,
+            "media",
+            "not silently osu"
+        );
+        assert!(conflicts.contains(&1351), "{conflicts:?}");
     }
 
     #[test]

@@ -184,12 +184,9 @@ impl Pad {
                     return self.err(105, 0, "E_WRITE: flash write failed");
                 }
                 if let Some(code) = self.fail_commit_code {
-                    if code == 106 {
-                        // Written, read-back differed: flash holds it, and the
-                        // firmware re-reads flash for HELLO's crc.
-                        self.stored = self.staging.clone();
-                        self.report_crc = None;
-                    }
+                    // E_VERIFY whose second read doesn't confirm the record:
+                    // flash keeps the old one (the firmware turns a
+                    // confirmed second read into an ordinary save).
                     return self.err(code, 0, "E_VERIFY: read-back differs");
                 }
                 self.stored = self.staging.clone();
@@ -242,6 +239,15 @@ impl Transport for FakePort {
         let mut p = self.pad.lock();
         if p.boot != self.boot {
             bail!("device disconnected");
+        }
+        if p.mode == Mode::Normal {
+            // Entering config mode stages the stored record (or the default),
+            // as the firmware does.
+            p.staging = if p.stored.is_empty() || p.recovery {
+                p.default.clone()
+            } else {
+                p.stored.clone()
+            };
         }
         p.mode = Mode::Config;
         Ok(())

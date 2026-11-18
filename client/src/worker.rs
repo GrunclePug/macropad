@@ -61,6 +61,9 @@ pub enum Resp {
     Checked,
     /// A Save whose outcome was unclear did land: the pad holds this record.
     Landed(Vec<u8>),
+    /// A Save reached COMMIT but its outcome stayed open: the pad may hold
+    /// this record.
+    Unresolved(Vec<u8>),
     /// The pad rebooted with the new record and is back in normal mode.
     Saved,
     /// The pad refused the record; the editor keeps the edits.
@@ -263,6 +266,15 @@ impl<P: Ports> State<P> {
                 return Err(e);
             }
         };
+        // The record read must be the one HELLO described.
+        if let Some(crc) = hello.crc
+            && stored_crc(&record) != crc
+        {
+            if hello.mode == "config" {
+                let _ = c.exit();
+            }
+            bail!("the pad's setup changed while it was being read; connect again");
+        }
         // Only now is this the pad that Check and Save talk to.
         self.path = path.into();
         self.serial = serial;
@@ -433,7 +445,21 @@ impl<P: Ports> State<P> {
         self.client()?.put_record(rec)?;
         self.client()?.check()?;
         // Until the reboot check decides, the pad may hold this record.
-        self.attempted.push((stored_crc(rec), rec.to_vec()));
+        let crc = stored_crc(rec);
+        self.attempted.push((crc, rec.to_vec()));
+        let r = self.commit_and_verify(rec, &serial);
+        // Still open (neither refused nor confirmed): tell the GUI the pad
+        // may hold it.
+        if r.is_err() && self.attempted.iter().any(|(c, _)| *c == crc) {
+            self.emit(Resp::Unresolved(rec.to_vec()));
+        }
+        r
+    }
+
+    /// COMMIT, then the reboot check. The attempt stays in `attempted`
+    /// unless it's refused outright or confirmed.
+    fn commit_and_verify(&mut self, rec: &[u8], serial: &str) -> Result<()> {
+        let serial = serial.to_string();
         self.emit(Resp::Progress("Saving".into()));
         match self.client()?.commit() {
             Ok(_) => {}
@@ -516,7 +542,18 @@ mod tests {
     use crate::fake::{FAKE_PATH, FAKE_SERIAL, FakePad, FakePorts, Mode};
     use crate::preset::builtin;
 
+    /// The next reply, skipping progress and the Unresolved notes (tests
+    /// that check those use `next_raw`).
     fn next(w: &Worker) -> Resp {
+        loop {
+            match next_raw(w) {
+                Resp::Unresolved(_) => {}
+                r => return r,
+            }
+        }
+    }
+
+    fn next_raw(w: &Worker) -> Resp {
         loop {
             match w.rx.recv_timeout(Duration::from_secs(20)).expect("a reply") {
                 Resp::Progress(_) => {}
@@ -876,21 +913,34 @@ mod tests {
     }
 
     #[test]
-    fn an_unverified_commit_may_still_have_landed() {
+    fn an_unconfirmed_commit_is_reported_unresolved() {
         let (pad, w, s) = setup();
         let new = edited(&s.record);
-        pad.lock().fail_commit_code = Some(106); // E_VERIFY: written, read-back differed
+        // E_VERIFY and a second read that doesn't confirm it: flash kept the
+        // old record, but the client can't know that yet.
+        pad.lock().fail_commit_code = Some(106);
         w.send(Req::Save(new.clone()));
-        assert!(matches!(next(&w), Resp::Refused(_)));
-        pad.lock().fail_commit_code = None;
-        // No restart: HELLO's crc comes from flash, so the next request
-        // already sees the record that landed.
-        w.send(Req::Check(new.clone()));
-        let Resp::Landed(rec) = next(&w) else {
-            panic!("not recognised as landed")
+        let Resp::Unresolved(rec) = next_raw(&w) else {
+            panic!("the GUI isn't told it may have landed")
         };
         assert_eq!(rec, new);
+        assert!(matches!(next(&w), Resp::Refused(_)));
+        pad.lock().fail_commit_code = None;
+        // HELLO reports flash (the old record, the Connect crc): no change.
+        w.send(Req::Check(s.record.clone()));
         assert!(matches!(next(&w), Resp::Checked));
+    }
+
+    #[test]
+    fn a_save_refused_before_commit_is_not_unresolved() {
+        let (_pad, w, s) = setup();
+        let mut bad = s.record.clone();
+        bad[20] ^= 1; // CHECK refuses it
+        w.send(Req::Save(bad));
+        assert!(
+            matches!(next_raw(&w), Resp::Refused(_)),
+            "no Unresolved first"
+        );
     }
 
     #[test]
@@ -898,17 +948,15 @@ mod tests {
         let (pad, w, s) = setup();
         let new = edited(&s.record);
         pad.lock().fail_commit_code = Some(106);
-        w.send(Req::Save(new.clone()));
+        w.send(Req::Save(new));
         assert!(matches!(next(&w), Resp::Refused(_)));
         pad.lock().fail_commit_code = None;
         drop(w);
-        // Reconnect on the same boot: staging and HELLO's crc agree...
+        // Reconnect on the same boot: the record read and HELLO's crc agree.
         let (w, s2) = connect_to(&pad);
-        assert_eq!(s2.record, new);
-        assert_eq!(s2.hello.crc, Some(stored_crc(&new)));
-        // ...and a reboot changes nothing for that session.
+        assert_eq!(s2.hello.crc, Some(stored_crc(&s2.record)));
         pad.lock().restart();
-        w.send(Req::Check(new));
+        w.send(Req::Check(s2.record));
         assert!(matches!(next(&w), Resp::Checked));
     }
 

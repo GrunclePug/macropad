@@ -145,21 +145,20 @@ impl App {
                 }
                 self.status = "Saved. The pad restarted with the new setup.".into();
             }
-            Resp::Refused(e) => {
-                // A refusal is definitive, except E_VERIFY: written, read-back
-                // differed, so it may be what the pad holds.
-                if let Some(sent) = self.saving.take()
-                    && e.code == 106
-                {
-                    self.unresolved.push(sent);
+            Resp::Unresolved(rec) => {
+                // The worker says this Save reached COMMIT and stayed open:
+                // it may be what the pad holds. Its result follows.
+                if let Ok(c) = Config::decode(&rec) {
+                    self.unresolved.push(c);
                 }
+                return;
+            }
+            Resp::Refused(e) => {
+                self.saving = None;
                 self.error = Some(format!("The pad refused this setup: {e}"));
             }
             Resp::Failed(m) => {
-                // The outcome is open: keep the record as a candidate.
-                if let Some(sent) = self.saving.take() {
-                    self.unresolved.push(sent);
-                }
+                self.saving = None;
                 self.error = Some(m);
             }
             Resp::Left => {
@@ -1197,6 +1196,7 @@ mod tests {
         a.cfg = five.clone(); // edited back to 5 ms meanwhile
         a.snapshot_serial = Some("A".into());
         a.connecting_serial = Some("A".into());
+        a.handle(Resp::Unresolved(ten.encode().expect("encode")));
         a.handle(Resp::Failed("couldn't confirm the save".into()));
         let session = Session {
             hello: crate::protocol::Hello {
@@ -1261,12 +1261,9 @@ mod tests {
         a.snapshot = Some(five.clone());
         a.snapshot_serial = Some("A".into());
         a.connecting_serial = Some("A".into());
-        a.saving = Some(ten.clone()); // Save 10 ms: E_VERIFY, it reached flash
-        a.handle(Resp::Refused(crate::protocol::DeviceError {
-            code: 106,
-            offset: 0,
-            text: "read-back differs".into(),
-        }));
+        a.saving = Some(ten.clone()); // Save 10 ms: COMMIT sent, outcome open
+        a.handle(Resp::Unresolved(ten.encode().expect("encode")));
+        a.handle(Resp::Failed("couldn't confirm the save".into()));
         a.cfg = five.clone(); // edited back to 5 ms
         a.saving = Some(five.clone()); // the retry fails before COMMIT
         a.handle(Resp::Failed("no reply".into()));
@@ -1293,5 +1290,41 @@ mod tests {
             a.unresolved.is_empty() && a.saving.is_none(),
             "the read settled them"
         );
+    }
+
+    #[test]
+    fn a_save_that_failed_before_commit_is_no_candidate() {
+        let mut a = app();
+        let base = a.cfg.clone();
+        let mut on = base.clone();
+        on.sets[0].flags |= SET_LIVE;
+        on.release_ms = 7;
+        a.snapshot = Some(base.clone());
+        a.snapshot_serial = Some("A".into());
+        a.connecting_serial = Some("A".into());
+        a.saving = Some(on.clone());
+        a.handle(Resp::Failed("CHECK refused".into())); // never reached COMMIT
+        assert!(a.unresolved.is_empty());
+        a.cfg = base.clone(); // reverted
+        // The pad independently holds a record equal to the failed Save's.
+        let session = Session {
+            hello: crate::protocol::Hello {
+                fw: "0.3.0".into(),
+                mode: "config".into(),
+                cfg: "ok".into(),
+                crc: None,
+                boot: 4,
+                sn: None,
+            },
+            pins: PIN_NAMES
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (u8::try_from(i).expect("16 pins"), (*n).to_string()))
+                .collect(),
+            tools: builtin_tools(),
+            record: on.encode().expect("encode"),
+        };
+        a.on_connect(session);
+        assert_eq!(a.cfg, on, "no unsaved edits: the pad's setup is shown");
     }
 }
