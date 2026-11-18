@@ -436,54 +436,158 @@ pub fn merge3(base: &[u8], mine: &[u8], theirs: &[u8]) -> Result<(Vec<u8>, Vec<u
     if base.len() != SIZE || mine.len() != SIZE || theirs.len() != SIZE {
         anyhow::bail!("records of the wrong size");
     }
-    let mut out = theirs.to_vec();
-    let mut conflicts = Vec::new();
-    // The pad's set-level changes apply only where the editor still has the
-    // same set in that slot (by id): removing or reordering sets in the
-    // editor must not move a pad-side change onto another set.
+    const COUNT: usize = 67;
     const SET0: usize = 68;
     const SET_LEN: usize = 169;
-    let same_set = |k: usize| {
-        let id = SET0 + k * SET_LEN..SET0 + k * SET_LEN + 7;
-        base[67] == mine[67] && base[id.clone()] == mine[id]
-    };
-    let sets_unchanged = (0..SETS).all(same_set);
+    const SETS_END: usize = SET0 + SETS * SET_LEN;
+    const STARTUP: usize = 1351;
+    let mut out = theirs.to_vec();
+    let mut conflicts = Vec::new();
+
+    // Everything outside the key sets and the start-up byte, field by field.
     for (at, len, bits) in merge_spans() {
-        let r = at..at + len;
-        let slot = (SET0..SET0 + SETS * SET_LEN)
-            .contains(&at)
-            .then(|| (at - SET0) / SET_LEN);
-        let theirs_usable = match slot {
-            Some(k) => same_set(k),
-            None if at == 1351 => sets_unchanged, // the start-up set
-            None => true,
-        };
-        if !theirs_usable {
-            if theirs[r.clone()] != base[r.clone()] && theirs[r.clone()] != mine[r.clone()] {
-                conflicts.push(at);
-            }
-            out[r.clone()].copy_from_slice(&mine[r]);
+        if (COUNT..SETS_END).contains(&at) || at == STARTUP {
             continue;
         }
-        if bits {
-            let (b, m, t) = (base[at], mine[at], theirs[at]);
-            let mine_changed = m ^ b;
-            let theirs_changed = t ^ b;
-            out[at] = (m & mine_changed) | (t & !mine_changed);
-            if mine_changed & theirs_changed & (m ^ t) != 0 {
-                conflicts.push(at);
-            }
-        } else if mine[r.clone()] != base[r.clone()] {
-            if theirs[r.clone()] != base[r.clone()] && theirs[r.clone()] != mine[r.clone()] {
-                conflicts.push(at);
-            }
-            out[r.clone()].copy_from_slice(&mine[r]);
-        }
+        merge_field(
+            base,
+            mine,
+            theirs,
+            &mut out,
+            at,
+            at,
+            len,
+            bits,
+            &mut conflicts,
+        );
     }
+
+    // Key sets, by identity (id), never by slot.
+    let sets = |rec: &[u8]| -> Vec<(Vec<u8>, Vec<u8>)> {
+        (0..usize::from(rec[COUNT]).min(SETS))
+            .map(|k| {
+                let s = rec[SET0 + k * SET_LEN..SET0 + (k + 1) * SET_LEN].to_vec();
+                (s[..7].to_vec(), s)
+            })
+            .collect()
+    };
+    let (b, m, t) = (sets(base), sets(mine), sets(theirs));
+    let ids = |v: &[(Vec<u8>, Vec<u8>)]| v.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>();
+    let find = |v: &[(Vec<u8>, Vec<u8>)], id: &[u8]| {
+        v.iter().find(|(i, _)| i == id).map(|(_, s)| s.clone())
+    };
+    let merged: Vec<Vec<u8>> = if ids(&m) == ids(&b) || ids(&t) == ids(&b) {
+        // One side kept the list as it was: the other side's order wins,
+        // and each set both sides have merges field by field.
+        let order = if ids(&m) == ids(&b) { &t } else { &m };
+        order
+            .iter()
+            .enumerate()
+            .map(
+                |(k, (id, _))| match (find(&b, id), find(&m, id), find(&t, id)) {
+                    (Some(bs), Some(ms), Some(ts)) => {
+                        let mut o = ts.clone();
+                        for (rel, len, bits) in set_spans() {
+                            merge_field(
+                                &bs,
+                                &ms,
+                                &ts,
+                                &mut o,
+                                rel,
+                                SET0 + k * SET_LEN + rel,
+                                len,
+                                bits,
+                                &mut conflicts,
+                            );
+                        }
+                        o
+                    }
+                    (_, Some(ms), None) => ms,
+                    (_, _, Some(ts)) => ts,
+                    _ => unreachable!("every id comes from the order's side"),
+                },
+            )
+            .collect()
+    } else {
+        // Both changed the set list: the editor's list, named.
+        conflicts.push(COUNT);
+        m.iter().map(|(_, s)| s.clone()).collect()
+    };
+    out[COUNT..SETS_END].fill(0);
+    out[COUNT] = u8::try_from(merged.len()).unwrap_or(0);
+    for (k, s) in merged.iter().enumerate() {
+        out[SET0 + k * SET_LEN..SET0 + (k + 1) * SET_LEN].copy_from_slice(s);
+    }
+
+    // The start-up set, by identity: the editor's choice if it made one,
+    // else the pad's, placed in the merged list.
+    let chosen = |rec: &[u8]| {
+        let k = usize::from(rec[STARTUP]);
+        rec[SET0 + k.min(SETS - 1) * SET_LEN..][..7].to_vec()
+    };
+    let (cb, cm, ct) = (chosen(base), chosen(mine), chosen(theirs));
+    let want = if cm != cb {
+        if ct != cb && ct != cm {
+            conflicts.push(STARTUP);
+        }
+        cm
+    } else {
+        ct
+    };
+    out[STARTUP] = merged
+        .iter()
+        .position(|s| s[..7] == want[..])
+        .and_then(|k| u8::try_from(k).ok())
+        .unwrap_or(0);
+
     out[12..16].fill(0);
     let crc = crc32(&out);
     out[12..16].copy_from_slice(&crc.to_le_bytes());
     Ok((out, conflicts))
+}
+
+/// One field of a three-way merge: the editor's value where it changed,
+/// otherwise the pad's; bitwise for flags. `report` is the offset named in a
+/// conflict (in the merged record).
+#[expect(clippy::too_many_arguments, reason = "one field of three records")]
+fn merge_field(
+    base: &[u8],
+    mine: &[u8],
+    theirs: &[u8],
+    out: &mut [u8],
+    at: usize,
+    report: usize,
+    len: usize,
+    bits: bool,
+    conflicts: &mut Vec<usize>,
+) {
+    let r = at..at + len;
+    if bits {
+        let (b, m, t) = (base[at], mine[at], theirs[at]);
+        let mine_changed = m ^ b;
+        out[at] = (m & mine_changed) | (t & !mine_changed);
+        if mine_changed & (t ^ b) & (m ^ t) != 0 {
+            conflicts.push(report);
+        }
+    } else if mine[r.clone()] != base[r.clone()] {
+        if theirs[r.clone()] != base[r.clone()] && theirs[r.clone()] != mine[r.clone()] {
+            conflicts.push(report);
+        }
+        out[r.clone()].copy_from_slice(&mine[r]);
+    }
+}
+
+/// A key set's fields, relative to the set: id, name, flags (bitwise),
+/// reserved, 11 bindings, reserved.
+fn set_spans() -> Vec<(usize, usize, bool)> {
+    let mut v = vec![(0, 7, false), (7, 13, false), (20, 1, true), (21, 1, false)];
+    for b in 0..11 {
+        v.push((22 + b * 13, 13, false));
+    }
+    for r in 0..4 {
+        v.push((165 + r, 1, false));
+    }
+    v
 }
 
 /// Which field of the record a byte offset belongs to, for error messages.
@@ -678,12 +782,46 @@ mod tests {
 
     #[test]
     fn merge3_never_moves_a_pad_change_onto_another_set() {
-        let base = vector("default.hex"); // sets: osu, stream, media
+        let mut b = Config::decode(&vector("default.hex")).expect("decode"); // osu, stream, media
+        b.selected = 1; // starts on stream
+        let base = b.encode().expect("encode");
         let mut mine = Config::decode(&base).expect("decode");
-        mine.sets.remove(0); // the editor drops osu: stream moves to slot 0
+        mine.sets.remove(0); // the editor drops osu: stream moves to slot 0...
+        mine.selected = 0; // ...and is still the start-up set
         let mut theirs = Config::decode(&base).expect("decode");
         theirs.sets[0].flags ^= SET_LIVE; // the pad toggles osu's live flag
         theirs.selected = 2; // and starts on media
+        let (out, _) = merge3(
+            &base,
+            &mine.encode().expect("e"),
+            &theirs.encode().expect("e"),
+        )
+        .expect("merge");
+        let m = Config::decode(&out).expect("decodes");
+        assert_eq!(m.sets.len(), 2);
+        assert_eq!(m.sets[0].id, "stream");
+        assert_eq!(
+            m.sets[0].flags, mine.sets[0].flags,
+            "osu's toggle didn't land on stream"
+        );
+        assert_eq!(
+            m.sets[usize::from(m.selected)].id,
+            "media",
+            "the pad's start-up set, by identity"
+        );
+    }
+
+    #[test]
+    fn merge3_keeps_pad_set_changes_when_the_editor_appends_a_set() {
+        let base = vector("default.hex");
+        let mut mine = Config::decode(&base).expect("decode");
+        mine.sets.push(KeySet {
+            id: "extra".into(),
+            name: "Extra".into(),
+            ..KeySet::default()
+        });
+        let mut theirs = Config::decode(&base).expect("decode");
+        theirs.sets[0].flags ^= SET_LIVE; // the most common pad edit
         let (out, conflicts) = merge3(
             &base,
             &mine.encode().expect("e"),
@@ -691,19 +829,56 @@ mod tests {
         )
         .expect("merge");
         let m = Config::decode(&out).expect("decodes");
-        assert_eq!(m.sets[0].id, "stream");
+        assert_eq!(m.sets.len(), 4);
         assert_eq!(
-            m.sets[0].flags, mine.sets[0].flags,
-            "osu's toggle didn't land on stream"
+            m.sets[0].flags, theirs.sets[0].flags,
+            "the pad's toggle survives"
         );
+        assert!(conflicts.is_empty(), "{conflicts:?}");
+    }
+
+    #[test]
+    fn merge3_never_puts_an_edit_on_a_set_the_pad_moved() {
+        let base = vector("default.hex"); // osu, stream, media
+        let mut mine = Config::decode(&base).expect("decode");
+        mine.sets[0].keys[0].label = "NEW".into(); // an edit to osu
+        let mut theirs = Config::decode(&base).expect("decode");
+        theirs.sets.swap(0, 1); // pushed elsewhere: stream, osu, media
+        let (out, conflicts) = merge3(
+            &base,
+            &mine.encode().expect("e"),
+            &theirs.encode().expect("e"),
+        )
+        .expect("merge");
+        let m = Config::decode(&out).expect("decodes");
+        let stream = m.sets.iter().find(|s| s.id == "stream").expect("stream");
+        let osu = m.sets.iter().find(|s| s.id == "osu").expect("osu");
+        assert_ne!(stream.keys[0].label, "NEW", "stream never gets osu's edit");
         assert_eq!(
-            m.selected, mine.selected,
-            "the start-up set isn't taken by slot"
+            osu.keys[0].label, "NEW",
+            "osu keeps it, wherever the pad put it"
         );
-        assert!(
-            conflicts.contains(&(68 + 20)) && conflicts.contains(&1351),
-            "{conflicts:?}"
-        );
+        assert_eq!(m.sets[0].id, "stream", "in the pad's order");
+        assert!(conflicts.is_empty(), "{conflicts:?}");
+    }
+
+    #[test]
+    fn merge3_keeps_the_editors_list_when_both_restructure() {
+        let base = vector("default.hex"); // osu, stream, media
+        let mut mine = Config::decode(&base).expect("decode");
+        mine.sets.remove(2); // the editor drops media
+        let mut theirs = Config::decode(&base).expect("decode");
+        theirs.sets.swap(0, 1); // and the pad was reordered elsewhere
+        let (out, conflicts) = merge3(
+            &base,
+            &mine.encode().expect("e"),
+            &theirs.encode().expect("e"),
+        )
+        .expect("merge");
+        let m = Config::decode(&out).expect("decodes");
+        let ids: Vec<&str> = m.sets.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["osu", "stream"]);
+        assert!(conflicts.contains(&67), "{conflicts:?}");
     }
 
     #[test]
