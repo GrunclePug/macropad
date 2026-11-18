@@ -43,6 +43,8 @@ if mode == 'erase':
     ok = h['cfg'] == 'ok' and h['crc'] == stored and stored != before
     print('PASS' if ok else 'FAIL', 'fresh pad: entry creates the record with the edit; HELLO matches GET')
     req(s, b'TESTERASE\tnorun\n'); s.close(); time.sleep(3)   # fresh again and idle, for the push
+    s = knock(); h = hello(s); req(s, b'EXIT\n'); s.close(); time.sleep(1)
+    print('PASS' if h['cfg'] == 'none' and h['crc'] == 'none' else 'FAIL', 'erased again for the push:', h['cfg'], h['crc'])
 elif mode == 'corrupt':
     req(s, b'TESTCORRUPT\n'); s.close(); time.sleep(3)
     s = knock(); h = hello(s); print('after TESTCORRUPT:', h['mode'], h['cfg']); s.close()

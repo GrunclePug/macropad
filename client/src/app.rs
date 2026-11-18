@@ -203,20 +203,26 @@ impl App {
                 // stored, unreadable, or a safe or crash boot on any of
                 // those) GET serves the compiled default or the running
                 // setup, not a stored one.
-                let usable = s.hello.crc.is_some();
+                // A flash fault (`cfg ok`, no crc) serves the running setup,
+                // the pad's unsaved edits included: real, so edits rebase
+                // onto it like onto a stored record.
+                let usable = s.hello.crc.is_some() || unverified;
                 let (cfg, kept) = self.carry_over(&c, usable);
                 self.cfg = cfg;
                 if unverified {
                     // Save is refused until a restart: say that, not "Save".
                     // A notice about another pad's discarded edits stays.
-                    let earlier = if kept { None } else { self.notice.take() };
-                    let fault = if kept {
-                        "The pad can't read its stored setup back (a flash fault). Unplug it, \
-                         plug it back in and connect again; the editor keeps your setup."
-                    } else {
-                        "The pad can't read its stored setup back (a flash fault). Unplug it, \
-                         plug it back in and connect again; the editor keeps the setup it read."
-                    };
+                    // (A plain rebase can't be sent yet: say so without "Save".)
+                    let earlier = self.notice.take().map(|e| {
+                        if e == REBASED {
+                            "Your unsaved edits are kept, on top of the setup the pad is running."
+                                .into()
+                        } else {
+                            e
+                        }
+                    });
+                    let fault = "The pad can't read its stored setup back (a flash fault). Unplug it, \
+                                 plug it back in and connect again; the editor keeps this setup.";
                     self.notice = Some(match earlier {
                         Some(e) => format!("{e} {fault}"),
                         None => fault.into(),
@@ -360,10 +366,7 @@ impl App {
         })();
         match rebased {
             Ok((merged, conflicts)) if conflicts.is_empty() => {
-                self.notice = Some(
-                    "Your unsaved edits are kept, on top of the pad's current setup. Save to send them, or Revert."
-                        .into(),
-                );
+                self.notice = Some(REBASED.into());
                 (merged, false)
             }
             Ok((merged, conflicts)) => {
@@ -923,6 +926,9 @@ fn empty_config() -> Config {
 }
 
 /// What a rebase with conflicts tells the user, by kind.
+const REBASED: &str =
+    "Your unsaved edits are kept, on top of the pad's current setup. Save to send them, or Revert.";
+
 fn conflict_notice(base: &Config, merged: &Config, conflicts: &[usize]) -> String {
     use crate::config::{DROPPED_SET, STARTUP_GONE};
     let mut parts =
@@ -1263,17 +1269,25 @@ mod tests {
         assert_eq!(a.cfg, pad, "a crash or safe boot keeps the editor too");
         assert!(a.notice.as_ref().expect("notice").contains("no usable"));
 
-        // Unreadable at config entry (`cfg ok`, no crc): the editor is kept,
-        // and the app says to replug, not to Save (which is refused).
+        // Unreadable at config entry (`cfg ok`, no crc), after a verified
+        // Connect: GET serves the running setup with the pad's unsaved edit,
+        // and the editor's own edit rebases onto it. The app says to replug,
+        // not to Save (which is refused).
         session.hello.cfg = "ok".into();
+        let mut running = pad.clone();
+        running.selected = 1; // edited on the pad, not stored
+        session.record = running.encode().expect("encode");
         a.snapshot = Some(pad.clone());
         a.cfg = pad.clone();
+        a.cfg.release_ms = 9; // the editor's own edit
         a.connecting_serial = Some("A".into());
         a.on_connect(session.clone());
-        assert_eq!(a.cfg, pad);
+        assert_eq!(a.cfg.selected, 1, "the pad's edit is kept");
+        assert_eq!(a.cfg.release_ms, 9, "and so is the editor's");
         let n = a.notice.clone().expect("notice");
-        assert!(n.contains("Unplug") && !n.contains("Save"), "{n}");
+        assert!(n.contains("Unplug") && !n.contains("Save to"), "{n}");
         assert!(a.status.contains("replug"), "{}", a.status);
+        session.record = default.encode().expect("encode");
         session.hello.cfg = "default crash".into();
 
         // Another pad, unreadable, while the editor holds edits for this one:
@@ -1329,7 +1343,7 @@ mod tests {
             a.notice
                 .as_ref()
                 .expect("notice")
-                .contains("keeps the setup it read")
+                .contains("keeps this setup")
         );
         // The replug: the old record reads again.
         session.hello.crc = Some(1);

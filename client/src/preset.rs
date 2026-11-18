@@ -314,6 +314,9 @@ pub fn write_file(path: &std::path::Path, text: &str) -> Result<()> {
         // Short, so any legal file name still fits; create_new skips a name
         // that's taken (the destination's own, too).
         let tmp_name = format!(".macropad-{}-{n}.tmp", std::process::id());
+        if path.file_name() == Some(std::ffi::OsStr::new(&tmp_name)) {
+            continue; // never the destination itself, even when it doesn't exist yet
+        }
         let tmp = dir.map_or_else(|| tmp_name.clone().into(), |d| d.join(&tmp_name));
         let mut f = match std::fs::OpenOptions::new()
             .write(true)

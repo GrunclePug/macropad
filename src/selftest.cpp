@@ -265,7 +265,7 @@ void selftest_step(uint32_t now) {
   static uint8_t K[4], KILL, NAV;
   static int i, j;
   static int32_t v;
-  static uint32_t t, calls, gen0;
+  static uint32_t t, calls, gen0, gen1;
   static bool running = false;
 
   // Never drive pins outside normal mode: stop and release everything.
@@ -511,12 +511,14 @@ void selftest_step(uint32_t now) {
       for (j = 0; j < 4; j++) {
         gen0 = core.link_gen();  // the link before this hold
         PRESS(KILL);
-        WAIT(800);
+        WAIT(650);  // the hold fires at about 600 ms
+        gen1 = core.link_gen();  // the link when the hold was handled
+        WAIT(150);
         LIFT(KILL);
         WAIT(100);
         if (!any_enabled()) break;
         cleanup_holds++;
-        if (core.link_gen() == gen0) cleanup_unexplained++;  // no link change discarded it
+        if (gen1 == gen0) cleanup_unexplained++;  // no link change discarded it
       }
       TAP(KILL);
       HOLD(NAV);

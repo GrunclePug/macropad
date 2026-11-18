@@ -11,7 +11,7 @@ Then the knock, and the report is read from config mode; TESTACK only once
 its summary was read. Reopens the port when the pad drops off USB (the
 self-test includes a USB detach). Exits 1 if no report was read.
 """
-import glob, os, select, sys, threading, time
+import glob, os, re, select, sys, threading, time
 import serial
 
 sn, mode, out = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -104,10 +104,10 @@ end = time.monotonic() + 30
 while time.monotonic() < end:
     try: buf += port.read(4096)
     except Exception: pass
-    if b'checks,' in buf and buf.endswith(b'\n') and b'===' in buf.split(b'checks,')[-1]:
+    if re.search(rb'=== \d+ checks, \d+ failed ===\r?\n', buf):  # the whole summary line
         time.sleep(0.5); buf += port.read(4096); break
     time.sleep(0.02)
-got = b'checks,' in buf
+got = re.search(rb'=== \d+ checks, \d+ failed ===', buf) is not None
 if got: port.write(b"TESTACK\n"); time.sleep(0.3)   # read: it may go
 port.write(b"EXIT\n"); time.sleep(0.5)
 try: buf += port.read(4096)

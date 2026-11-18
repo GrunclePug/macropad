@@ -153,7 +153,7 @@ Firmware, from the repository root:
 * Test: `make test`
 * Flash: `make upload PORT=/dev/ttyACM0`
 * Self-test: `make SELFTEST=1 upload PORT=/dev/ttyACM0`
-* Hardware checks: `make && make SELFTEST=1`, build the client, then `test/hil/run.sh <USB serial number>` (the script's header says what it does)
+* Hardware checks: `test/hil/run.sh <USB serial number>` (builds everything first; the script's header says what it does); restart soak: `test/hil/soak.sh <USB serial number>`
 * Test vectors: `make vectors`
 * Clean: `make clean`
 

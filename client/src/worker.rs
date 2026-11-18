@@ -572,7 +572,10 @@ impl<P: Ports> State<P> {
                 Err(e) => last_err = format!("{e:#}"),
             }
         }
-        bail!("couldn't confirm the save: {last_err}; your edits are still here")
+        bail!(
+            "couldn't confirm the save: {last_err}; your edits are still here. If the pad doesn't \
+             show up again, unplug it, plug it back in and connect"
+        )
     }
 }
 
