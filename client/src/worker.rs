@@ -1104,7 +1104,7 @@ mod tests {
         let Resp::Failed(m) = next(&w) else {
             panic!("wrote over an unverified setup")
         };
-        assert!(m.contains("can't confirm"), "{m}");
+        assert!(m.contains("can't read its stored setup back"), "{m}");
         assert_eq!(pad.lock().commits, 0);
     }
 
@@ -1142,7 +1142,7 @@ mod tests {
         let Resp::Failed(m) = next(&w) else {
             panic!("wrote over an unverified setup")
         };
-        assert!(m.contains("can't confirm"), "{m}");
+        assert!(m.contains("can't read its stored setup back"), "{m}");
         assert_eq!(pad.lock().commits, 0);
     }
 
