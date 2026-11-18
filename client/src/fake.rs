@@ -42,6 +42,8 @@ pub struct Pad {
     pub lose_commit: bool,
     /// Report `crc none` while `cfg ok` (a flash read that failed).
     pub hide_crc: bool,
+    /// Report this `cfg` instead (with `hide_crc`: a fault on a crash boot).
+    pub report_cfg: Option<&'static str>,
     /// Refuse COMMIT with this code instead (105 E_WRITE or 106 E_VERIFY,
     /// both after a second read that didn't confirm the record).
     pub fail_commit_code: Option<u8>,
@@ -73,6 +75,7 @@ impl FakePad {
             fail_commit: false,
             lose_commit: false,
             hide_crc: false,
+            report_cfg: None,
             fail_commit_code: None,
             sn: FAKE_SERIAL.into(),
             swap_sn_on_commit: None,
@@ -137,6 +140,7 @@ impl Pad {
         if self.hide_crc {
             crc = "none".into();
         }
+        let cfg = self.report_cfg.map_or(cfg, str::to_string);
         self.reply(format!(
             "OK\tmacropad\t0.3.0\tproto 1\tmode {mode}\tcfg {cfg}\tcrc {crc}\tboot {:08x}\tsn {}",
             self.boot, self.sn

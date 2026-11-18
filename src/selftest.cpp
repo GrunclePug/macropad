@@ -265,7 +265,7 @@ void selftest_step(uint32_t now) {
   static uint8_t K[4], KILL, NAV;
   static int i, j;
   static int32_t v;
-  static uint32_t t, calls, gen0, gen1;
+  static uint32_t t, calls, gen0;
   static bool running = false;
 
   // Never drive pins outside normal mode: stop and release everything.
@@ -509,16 +509,16 @@ void selftest_step(uint32_t now) {
       // A link change during the hold (the host may suspend the pad after the
       // reconnect above) discards it, by design: hold again until it took.
       for (j = 0; j < 4; j++) {
-        gen0 = core.link_gen();  // the link before this hold
+        gen0 = core.kill_holds_discarded();
         PRESS(KILL);
-        WAIT(650);  // the hold fires at about 600 ms
-        gen1 = core.link_gen();  // the link when the hold was handled
-        WAIT(150);
+        WAIT(800);
         LIFT(KILL);
         WAIT(100);
         if (!any_enabled()) break;
         cleanup_holds++;
-        if (gen1 == gen0) cleanup_unexplained++;  // no link change discarded it
+        // The core counts a hold it ignored because the link changed during
+        // the press; any other missed hold is unexplained.
+        if (core.kill_holds_discarded() == gen0) cleanup_unexplained++;
       }
       TAP(KILL);
       HOLD(NAV);

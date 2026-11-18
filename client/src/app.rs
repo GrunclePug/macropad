@@ -195,7 +195,10 @@ impl App {
             self.worker.send(Req::Disconnect);
             return;
         }
-        let unverified = s.hello.cfg == "ok" && s.hello.crc.is_none();
+        // A flash fault: `cfg ok` (or `cfg ok default` on a safe or crash
+        // boot) without a crc.
+        let unverified =
+            (s.hello.cfg == "ok" || s.hello.cfg == "ok default") && s.hello.crc.is_none();
         let kept_editor = match Config::decode(&s.record) {
             Ok(c) => {
                 // A crc means GET served a stored, validated record (or the
@@ -203,11 +206,12 @@ impl App {
                 // stored, unreadable, or a safe or crash boot on any of
                 // those) GET serves the compiled default or the running
                 // setup, not a stored one.
-                // A flash fault (`cfg ok`, no crc) serves the running setup,
-                // the pad's unsaved edits included: real, so edits rebase
-                // onto it like onto a stored record.
-                let usable = s.hello.crc.is_some() || unverified;
-                let (cfg, kept) = self.carry_over(&c, usable);
+                // A flash fault on a normal boot (`cfg ok`, no crc) serves
+                // the running setup, the pad's unsaved edits included: real,
+                // so edits rebase onto it like onto a stored record. On a
+                // safe or crash boot (`cfg ok default`) it's the default.
+                let usable = s.hello.crc.is_some() || s.hello.cfg == "ok";
+                let (cfg, kept) = self.carry_over(&c, usable, unverified);
                 self.cfg = cfg;
                 if unverified {
                     // Save is refused until a restart: say that, not "Save".
@@ -314,7 +318,8 @@ impl App {
     /// they were made against; otherwise the pad's setup. A pad with no
     /// usable stored setup (`usable` false) that this app read before keeps
     /// the editor's contents, so a Save restores them (`true` returned).
-    fn carry_over(&mut self, pad: &Config, usable: bool) -> (Config, bool) {
+    /// `unverified`: this Connect found a flash fault.
+    fn carry_over(&mut self, pad: &Config, usable: bool, unverified: bool) -> (Config, bool) {
         let same_pad =
             self.snapshot_serial.is_some() && self.snapshot_serial == self.connecting_serial;
         // A Save whose outcome was unclear and which the pad now holds landed:
@@ -330,7 +335,9 @@ impl App {
         // The last Connect to this pad couldn't vouch for its setup: what it
         // read (with the pad's unsaved edits) stays, so a restart that brings
         // the old record back doesn't drop those edits unseen.
-        if std::mem::take(&mut self.unverified_draft) && same_pad {
+        // Only on a verified Connect: a second faulted one (no restart yet)
+        // rebases onto the newer running setup below instead.
+        if std::mem::take(&mut self.unverified_draft) && same_pad && !unverified {
             if self.cfg != *pad {
                 self.notice = Some(
                     "The editor still holds the setup read before the restart, edits made on the pad \
@@ -1288,6 +1295,19 @@ mod tests {
         assert!(n.contains("Unplug") && !n.contains("Save to"), "{n}");
         assert!(a.status.contains("replug"), "{}", a.status);
         session.record = default.encode().expect("encode");
+
+        // The same fault on a crash boot (`cfg ok default`): GET serves the
+        // compiled default, so the editor keeps its setup.
+        session.hello.cfg = "ok default".into();
+        a.snapshot = Some(pad.clone());
+        a.cfg = pad.clone();
+        a.connecting_serial = Some("A".into());
+        a.on_connect(session.clone());
+        assert_eq!(
+            a.cfg, pad,
+            "a faulted crash boot doesn't replace the editor with the default"
+        );
+        assert!(a.notice.as_ref().expect("notice").contains("Unplug"));
         session.hello.cfg = "default crash".into();
 
         // Another pad, unreadable, while the editor holds edits for this one:
@@ -1345,6 +1365,15 @@ mod tests {
                 .expect("notice")
                 .contains("keeps this setup")
         );
+        // Still faulted, no replug: the pad saved nothing, but it was edited
+        // again (selected); the editor rebases onto the newer running setup.
+        let mut running2 = running.clone();
+        running2.selected = 1;
+        session.record = running2.encode().expect("encode");
+        a.connecting_serial = Some("A".into());
+        a.on_connect(session.clone());
+        assert_eq!(a.cfg, running2, "the second pad edit isn't dropped");
+        let running = running2;
         // The replug: the old record reads again.
         session.hello.crc = Some(1);
         session.hello.boot = 2;

@@ -73,6 +73,22 @@ TEST(killswitch_hold_switches_everything_off) {
   CHECK(r.core.banner(r.t) != nullptr);
 }
 
+TEST(a_link_change_during_a_kill_press_discards_its_hold) {
+  Rig r(def());
+  open_item(r, M_CLICK);
+  r.tap_button(NAV);
+  CHECK(r.core.active(T_CLICK) && r.core.kill_holds_discarded() == 0);
+  r.buttons |= 1u << KILL;
+  r.run(300);
+  r.disturbed = true;  // a bus reset mid-press
+  r.run(500);
+  r.buttons &= ~(1u << KILL);
+  r.run(60);
+  CHECK(r.core.enabled(T_CLICK) && r.core.kill_holds_discarded() == 1);
+  r.hold_button(KILL);  // a clean hold takes
+  CHECK(!r.core.enabled(T_CLICK) && r.core.kill_holds_discarded() == 1);
+}
+
 TEST(usb_loss_engages_killswitch_and_keeps_tools_armed) {
   Rig r(def());
   open_item(r, M_HOLD);
@@ -312,6 +328,7 @@ void run_core_tests() {
   RUN(killswitch_press_engages_and_its_release_does_not_disengage);
   RUN(arming_workflow);
   RUN(killswitch_hold_switches_everything_off);
+  RUN(a_link_change_during_a_kill_press_discards_its_hold);
   RUN(usb_loss_engages_killswitch_and_keeps_tools_armed);
   RUN(press_spanning_a_link_change_is_ignored);
   RUN(held_osu_key_cleared_by_killswitch_and_silent_after);

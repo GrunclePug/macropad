@@ -99,6 +99,8 @@ class Core {
   uint8_t held_keys() const { return killed_ || config_ ? 0 : held_; }
   bool killed() const { return killed_; }
   uint32_t link_gen() const { return link_gen_; }  // counts link losses and returns
+  // Kill holds ignored because the link changed during their press.
+  uint32_t kill_holds_discarded() const { return kill_holds_discarded_; }
   bool usb_up() const { return usb_up_; }
   bool enabled(uint8_t t) const { return enabled_[t]; }
   bool active(uint8_t t) const { return active_[t]; }
@@ -144,6 +146,7 @@ class Core {
   bool killed_ = false;
   bool kill_press_engaged_ = false;
   uint32_t kill_press_gen_ = 0;
+  uint32_t kill_holds_discarded_ = 0;
 
   bool config_ = false, recovery_ = false, config_request_ = false, cancel_ = false;
   bool frozen_ = false;

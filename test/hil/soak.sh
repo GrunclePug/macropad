@@ -20,7 +20,9 @@ T=$(mktemp -d)
 trap '[ "$fails" -eq 0 ] && rm -rf "$T" || echo "logs kept in $T"' EXIT
 CLIENT=./client/target/release/macropad-config
 fail() { echo "FAIL $*"; fails=$((fails + 1)); }
-dev() { readlink -f /dev/serial/by-id/*"$SN"* 2>/dev/null; }
+dev() {  # the pad's tty, or nothing (never an unmatched glob)
+	for p in /dev/serial/by-id/*"$SN"*; do [ -e "$p" ] && { readlink -f "$p"; return; }; done
+}
 up() {
 	timeout 20 python3 -I "$H/quiet.py" "$SN" > "$T/quiet.log" 2>&1 || { cat "$T/quiet.log"; fail "config mode before the upload"; return 1; }
 	arduino-cli upload --input-dir "$1" -p "$(dev)" . > "$T/upload.log" 2>&1 || { tail -3 "$T/upload.log"; fail "upload $1"; return 1; }
@@ -37,12 +39,13 @@ up() {
 }
 
 make > "$T/build.log" 2>&1 && make SELFTEST=1 >> "$T/build.log" 2>&1 && make -C client build >> "$T/build.log" 2>&1 ||
-	{ tail -5 "$T/build.log"; echo "FAIL build"; exit 1; }
-[ -n "$(dev)" ] || { echo "FAIL no serial port for $SN"; exit 1; }
+	{ tail -5 "$T/build.log"; fail build; exit 1; }
+[ -n "$(dev)" ] || { fail "no serial port for $SN"; exit 1; }
+usbpath=$(udevadm info -q path -n "$(dev)" 2>/dev/null | sed -n 's|.*/\([0-9-]*[0-9.]*\):[0-9.]*/tty/.*|\1|p')
 since=$(date '+%Y-%m-%d %H:%M:%S')
 # The pad's own setup is read on the normal firmware (the self-test build has its own).
 up .build/firmware || exit 1
-timeout 30 $CLIENT pull --port "$(dev)" "$T/before.toml" > /dev/null 2>&1 || { echo "FAIL pull the pad's setup first"; exit 1; }
+timeout 30 $CLIENT pull --port "$(dev)" "$T/before.toml" > /dev/null 2>&1 || { fail "pull the pad's setup first"; exit 1; }
 
 ok=0
 for k in $(seq 1 "$PUSHES"); do
@@ -72,8 +75,18 @@ if up .build/firmware; then
 	$pulled && cmp -s "$T/before.toml" "$T/after.toml" && echo "PASS normal firmware back, the pad's setup unchanged" ||
 		fail "the pad's setup after the soak differs or can't be read"
 fi
-usb=$(journalctl -k --since "$since" --no-pager 2>/dev/null | grep -E 'error -71|device descriptor read|irq status|cannot reset|disabled by hub' || true)
-[ -z "$usb" ] || { echo "$usb"; fail "USB errors in the kernel log"; }
+if journalctl -k -n 1 --no-pager > /dev/null 2>&1 && [ -n "$usbpath" ]; then
+	journalctl -k --since "$since" --no-pager > "$T/kernel.log"
+	usb=$(grep -E 'error -71|device descriptor read|irq status|cannot reset|disabled by hub' "$T/kernel.log" || true)
+	[ -z "$usb" ] || { echo "$usb"; fail "USB errors in the kernel log"; }
+	# An attach that never enumerated: the stuck-restart state (PLAN 9ze), even if it recovered.
+	attached=$(grep -c "usb $usbpath: new .*USB device number" "$T/kernel.log")
+	found=$(grep -c "usb $usbpath: New USB device found" "$T/kernel.log")
+	echo "USB attaches on $usbpath: $attached, enumerated: $found"
+	[ "$attached" -eq "$found" ] || fail "$((attached - found)) USB attaches never enumerated"
+else
+	fail "can't read the kernel log or the pad's USB path: USB errors unchecked"
+fi
 
 [ "$fails" -eq 0 ] && { echo "ALL CAME BACK"; exit 0; }
 echo "$fails FAILED"; exit 1

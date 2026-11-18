@@ -298,7 +298,10 @@ void Core::button_event(const Event& e, uint32_t now) {
         kill_press_engaged_ = !killed_;
         engage_kill();
       } else if (e.type == Ev::Hold) {
-        if (kill_press_gen_ == link_gen_) disable_all(now);
+        if (kill_press_gen_ == link_gen_)
+          disable_all(now);
+        else
+          kill_holds_discarded_++;
       } else if (e.type == Ev::Tap) {
         // Only a fresh tap, begun while already killed and with the link
         // unchanged since, turns the killswitch off.

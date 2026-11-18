@@ -391,7 +391,8 @@ impl<P: Ports> State<P> {
         // write on top of it.
         // (Nothing legitimate reports `cfg ok` without a crc: a fresh pad is
         // `cfg none`, recovery is `invalid N`; so this holds across reconnects.)
-        let unverified = h.cfg == "ok" && h.crc.is_none();
+        // (`cfg ok default`: the same fault on a safe or crash boot.)
+        let unverified = (h.cfg == "ok" || h.cfg == "ok default") && h.crc.is_none();
         let refuse = if unverified {
             Some(
                 "the pad can't read its stored setup back (a flash fault): unplug it, plug it back in and connect again",
@@ -1158,6 +1159,23 @@ mod tests {
             panic!("expected a plain failure")
         };
         assert!(m.contains("without the new setup"), "{m}");
+    }
+
+    #[test]
+    fn a_fault_on_a_crash_boot_is_refused_too() {
+        let (pad, w, s) = setup();
+        {
+            let mut p = pad.lock();
+            p.hide_crc = true;
+            p.report_cfg = Some("ok default");
+        }
+        w.send(Req::Save(edited(&s.record)));
+        assert!(matches!(next(&w), Resp::Disconnected));
+        let Resp::Failed(m) = next(&w) else {
+            panic!("wrote over an unverified setup")
+        };
+        assert!(m.contains("can't read its stored setup back"), "{m}");
+        assert_eq!(pad.lock().commits, 0);
     }
 
     #[test]

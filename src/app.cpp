@@ -69,12 +69,16 @@ void stage_default() {
 FlashState flash_state = {false, false};
 
 // Flash no longer holds what it should (unreadable, or a verified record
-// gone): `cfg ok` with `crc none` (whatever the boot row), which the client
-// refuses to write over, and no pad-side saves until a restart sorts it out.
+// gone): `cfg ok` with `crc none` (`cfg ok default` on a safe or crash boot,
+// which runs the compiled default), which the client refuses to write over,
+// and no pad-side saves until a restart sorts it out.
 void flash_fault() {
   env.has_crc = false;
   env.stored_crc = 0;
-  strcpy(cfg_status, "ok");
+  if (!strncmp(cfg_status, "default", 7) || !strcmp(cfg_status, "ok default"))
+    strcpy(cfg_status, "ok default");
+  else
+    strcpy(cfg_status, "ok");
   boot.persist = false;
   core.set_unsaved(true);
 }

@@ -4,8 +4,9 @@ into recovery) then COMMIT from recovery (a restart into normal mode), each
 checked by HELLO after the pad comes back.
 
 usage: soak.py SERIAL N
-Prints one PASS line per cycle that came back both times, FAIL otherwise, and
-stops at the first pad that doesn't come back within 20 s.
+Each restart must answer HELLO with a new boot nonce within 20 s: recovery
+after TESTCORRUPT (acknowledged), then normal mode with `cfg ok` and the crc
+COMMIT answered. Prints one PASS line per cycle, and stops at the first FAIL.
 """
 import glob, os, sys, time
 import serial
@@ -96,17 +97,33 @@ def connect(do_knock=True, tries=12):
         close(s); time.sleep(0.5)
     return None, None
 
+def back(boot0, do_knock, secs=20):
+    """The pad after a restart: a HELLO with a new boot nonce within secs."""
+    end = time.time() + secs
+    while time.time() < end:
+        s, h = connect(do_knock=do_knock, tries=1)
+        if h and h['boot'] != boot0: return s, h
+        if s: close(s)
+        time.sleep(0.3)
+    return None, None
+
+def stop(msg):
+    print('FAIL ' + msg, flush=True); sys.exit(1)
+
 t0 = time.time()
 for k in range(1, n + 1):
-    s, h = connect()
-    if not h: print('FAIL cycle %d: no HELLO before TESTCORRUPT' % k, flush=True); sys.exit(1)
-    s.write(b'TESTCORRUPT\n'); close(s); time.sleep(1.5)
-    s, h = connect(do_knock=False, tries=40)
-    if not h or h['mode'] != 'recovery':
-        print('FAIL cycle %d: back after TESTCORRUPT: %s' % (k, h), flush=True); sys.exit(1)
-    _, cm = req(s, 'COMMIT', 4.0); close(s); time.sleep(1.0)
-    s, h2 = connect(tries=40)
-    ok = bool(cm and cm.startswith('OK')) and bool(h2) and h2['cfg'] == 'ok' and h2['boot'] != h['boot']
+    s, h0 = connect()
+    if not h0: stop('cycle %d: no HELLO before TESTCORRUPT' % k)
+    _, ack = req(s, 'TESTCORRUPT'); close(s)
+    if ack != 'OK': stop('cycle %d: TESTCORRUPT not acknowledged (%s)' % (k, ack))
+    s, h = back(h0['boot'], do_knock=False)
+    if not h or h['mode'] != 'recovery': stop('cycle %d: not back in recovery within 20 s: %s' % (k, h))
+    _, cm = req(s, 'COMMIT', 4.0); close(s)
+    if not cm or not cm.startswith('OK\t'): stop('cycle %d: COMMIT from recovery: %s' % (k, cm))
+    want = cm.split('\t')[1]
+    s, h2 = back(h['boot'], do_knock=True)
+    ok = bool(h2) and h2['mode'] == 'config' and h2['cfg'] == 'ok' and h2['crc'] == want
     print('%s cycle %d (%.0f s): recovery boot %s, then %s' % ('PASS' if ok else 'FAIL', k, time.time() - t0, h['boot'], h2), flush=True)
-    if s: close(s)
+    if s:
+        req(s, 'EXIT'); close(s)
     if not ok: sys.exit(1)
