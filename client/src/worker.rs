@@ -438,7 +438,6 @@ impl<P: Ports> State<P> {
         self.emit(Resp::Progress("Saving".into()));
         match self.client()?.commit() {
             Ok(_) => {}
-            // A refusal is definitive: the record didn't land.
             // A refusal is definitive, except E_VERIFY: the write happened
             // and only its read-back differed, so the record may be there.
             Err(e)
@@ -901,5 +900,29 @@ mod tests {
         };
         assert_eq!(rec, new);
         assert!(matches!(next(&w), Resp::Checked));
+    }
+
+    #[test]
+    fn a_different_pad_answering_mid_session_is_refused() {
+        let (pad, w, s) = setup();
+        pad.lock().sn = "PAD-B".into(); // the port now answers as another pad
+        w.send(Req::Save(edited(&s.record)));
+        assert!(matches!(next(&w), Resp::Disconnected));
+        let Resp::Failed(m) = next(&w) else {
+            panic!("not refused")
+        };
+        assert!(m.contains("a different pad"), "{m}");
+        assert_eq!(pad.lock().commits, 0);
+    }
+
+    #[test]
+    fn the_reboot_check_never_accepts_a_different_pad() {
+        let (pad, w, s) = setup();
+        pad.lock().swap_sn_on_commit = Some("PAD-B".into()); // after the restart, another pad answers
+        w.send(Req::Save(edited(&s.record)));
+        let Resp::Failed(m) = next(&w) else {
+            panic!("verified against another pad")
+        };
+        assert!(m.contains("couldn't confirm"), "{m}");
     }
 }

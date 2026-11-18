@@ -42,6 +42,8 @@ pub struct Pad {
     pub fail_commit_code: Option<u8>,
     /// The USB serial number HELLO reports.
     pub sn: String,
+    /// After a COMMIT's restart, answer with this serial number instead.
+    pub swap_sn_on_commit: Option<String>,
     /// Answer PINS with an error (a Connect that fails after HELLO).
     pub fail_pins: bool,
     pub commits: u32,
@@ -66,6 +68,7 @@ impl FakePad {
             fail_commit: false,
             fail_commit_code: None,
             sn: FAKE_SERIAL.into(),
+            swap_sn_on_commit: None,
             report_crc: None,
             commits: 0,
             out: VecDeque::new(),
@@ -193,6 +196,9 @@ impl Pad {
                 self.commits += 1;
                 let crc = stored_crc(&self.stored);
                 self.reply(format!("OK\t{crc:08x}"));
+                if let Some(sn) = self.swap_sn_on_commit.take() {
+                    self.sn = sn;
+                }
                 if !self.no_reboot {
                     self.mode = Mode::Normal;
                     self.boot = self.boot.wrapping_mul(2_654_435_761).wrapping_add(1);
