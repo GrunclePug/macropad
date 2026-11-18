@@ -49,8 +49,13 @@ class Link {
   // True if the last discarded line was too long (cleared by reading it).
   bool take_overflow();
 
-  // Queue a reply line (without newline). Always fits: drops unstarted logs.
+  // Queue a reply line (without newline). Drops unstarted logs to make room.
   void reply(const char* line);
+  // Room for a reply line of this length (multi-line replies are paced).
+  bool reply_room(uint16_t len) const { return reply_len_ + len + 1 <= REPLY_CAP; }
+  // Start a fresh session (entering config mode): clear everything, purge
+  // the FIFOs, and take the current DTR as the baseline without a break.
+  void start();
   // Queue a log line (without the "# " prefix or newline) if connected and it
   // fits whole. Returns false if dropped.
   bool log(const char* line);

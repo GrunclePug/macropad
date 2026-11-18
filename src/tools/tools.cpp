@@ -2,34 +2,18 @@
 
 namespace mp {
 
-static const char* const BUTTONS[] = {"Left", "Right", "Middle"};
 static const uint8_t BUTTON_MASKS[] = {0x01, 0x02, 0x04};
-static const char* const HOLD_BUTTONS[] = {"Left", "Right", "Both"};
 static const uint8_t HOLD_MASKS[] = {0x01, 0x02, 0x03};
+
+static uint8_t pick(const uint8_t* table, int32_t i) { return table[i >= 0 && i <= 2 ? i : 0]; }
 
 // --- Autoclicker ---
 
-Autoclicker::Autoclicker(int32_t min_ms, int32_t max_ms, uint8_t test_mask)
-    : Tool("click", "Autoclicker"), min_(min_ms), max_(max_ms), test_mask_(test_mask) {
-  params_[0] = Param{"min", "Min", &min_, 20, 5000, 5, "ms", nullptr};
-  params_[1] = Param{"max", "Max", &max_, 20, 5000, 5, "ms", nullptr};
-  params_[2] = Param{"btn", "Button", &button_, 0, 2, 1, "", BUTTONS};
-}
-
-const Param* Autoclicker::params(size_t& n) {
-  n = 3;
-  return params_;
-}
-
-void Autoclicker::clamp() {
-  if (max_ < min_) max_ = min_;
-}
-
-uint8_t Autoclicker::mask() const { return test_mask_ ? test_mask_ : BUTTON_MASKS[button_]; }
+uint8_t Autoclicker::mask() const { return test_mask_ ? test_mask_ : pick(BUTTON_MASKS, p_[2]); }
 
 void Autoclicker::start(ToolCtx& c, uint32_t now) {
   state_ = IDLE;
-  next_ = now + c.rng.between(min_, max_);
+  next_ = now + c.rng.between(p_[0], p_[1]);
 }
 
 void Autoclicker::stop() { state_ = IDLE; }
@@ -38,7 +22,7 @@ void Autoclicker::tick(ToolCtx& c, uint32_t now) {
   switch (state_) {
     case IDLE:
       if (!due(now, next_)) return;
-      next_ = now + c.rng.between(min_, max_);
+      next_ = now + c.rng.between(p_[0], p_[1]);
       if (!c.hid.mouse_idle()) return;  // previous traffic still queued: skip
       out.press_button(mask());
       state_ = DOWN_QUEUED;
@@ -59,33 +43,17 @@ void Autoclicker::tick(ToolCtx& c, uint32_t now) {
       if (!c.hid.mouse_idle()) return;
       clicks++;
       state_ = IDLE;
-      if (due(now, next_)) next_ = now + c.rng.between(min_, max_);  // fell due mid-click: skip it
+      if (due(now, next_)) next_ = now + c.rng.between(p_[0], p_[1]);  // fell due mid-click: skip it
       return;
   }
 }
 
 // --- Jitter ---
 
-Jitter::Jitter(int32_t dist, int32_t min_ms, int32_t max_ms)
-    : Tool("jitter", "Jitter"), dist_(dist), min_(min_ms), max_(max_ms) {
-  params_[0] = Param{"dist", "Distance", &dist_, 10, 200, 10, "px", nullptr};
-  params_[1] = Param{"min", "Min pause", &min_, 100, 60000, 100, "ms", nullptr};
-  params_[2] = Param{"max", "Max pause", &max_, 100, 60000, 100, "ms", nullptr};
-}
-
-const Param* Jitter::params(size_t& n) {
-  n = 3;
-  return params_;
-}
-
-void Jitter::clamp() {
-  if (max_ < min_) max_ = min_;
-}
-
 void Jitter::start(ToolCtx&, uint32_t now) {
   phase_ = OUT;
   moved_ = 0;
-  cycle_ = dist_;
+  cycle_ = p_[0];
   next_ = now;
 }
 
@@ -104,41 +72,23 @@ void Jitter::tick(ToolCtx& c, uint32_t now) {
           phase_ = BACK;
         } else {
           phase_ = PAUSE;
-          next_ = now + c.rng.between(min_, max_);
+          next_ = now + c.rng.between(p_[1], p_[2]);
         }
       }
       return;
     }
     case PAUSE:
       phase_ = OUT;
-      cycle_ = dist_;
+      cycle_ = p_[0];
       return;
   }
 }
 
 // --- Keyspam ---
 
-Keyspam::Keyspam(const KeySet* sets, const char* const* names, uint8_t nsets, int32_t min_ms,
-                 int32_t max_ms, int32_t hold_ms)
-    : Tool("spam", "Keyspam"), sets_(sets), min_(min_ms), max_(max_ms), hold_(hold_ms) {
-  params_[0] = Param{"set", "Keys", &set_, 0, nsets - 1, 1, "", names};
-  params_[1] = Param{"min", "Min", &min_, 20, 10000, 10, "ms", nullptr};
-  params_[2] = Param{"max", "Max", &max_, 20, 10000, 10, "ms", nullptr};
-  params_[3] = Param{"hold", "Hold", &hold_, 10, 500, 10, "ms", nullptr};
-}
-
-const Param* Keyspam::params(size_t& n) {
-  n = 4;
-  return params_;
-}
-
-void Keyspam::clamp() {
-  if (max_ < min_) max_ = min_;
-}
-
 void Keyspam::start(ToolCtx& c, uint32_t now) {
   held_ = false;
-  next_ = now + c.rng.between(min_, max_);
+  next_ = now + c.rng.between(p_[1], p_[2]);
 }
 
 void Keyspam::stop() { held_ = false; }
@@ -151,28 +101,16 @@ void Keyspam::tick(ToolCtx& c, uint32_t now) {
     return;
   }
   if (!due(now, next_)) return;
-  const KeySet& s = sets_[set_];
-  out.press(s.mods, 0);
-  for (uint8_t u : s.usages)
-    if (u) out.press(0, u);
+  out.press(0, (uint8_t)p_[0]);
   held_ = true;
-  release_at_ = now + hold_;
-  next_ = now + c.rng.between(min_, max_);
+  release_at_ = now + p_[3];
+  next_ = now + c.rng.between(p_[1], p_[2]);
   if (!due(next_, release_at_ + 1)) next_ = release_at_ + 1;
 }
 
 // --- Mousehold ---
 
-Mousehold::Mousehold(uint8_t test_mask) : Tool("hold", "Mouse hold"), test_mask_(test_mask) {
-  params_[0] = Param{"btn", "Button", &button_, 0, 2, 1, "", HOLD_BUTTONS};
-}
-
-const Param* Mousehold::params(size_t& n) {
-  n = 1;
-  return params_;
-}
-
-uint8_t Mousehold::mask() const { return test_mask_ ? test_mask_ : HOLD_MASKS[button_]; }
+uint8_t Mousehold::mask() const { return test_mask_ ? test_mask_ : pick(HOLD_MASKS, p_[0]); }
 
 void Mousehold::start(ToolCtx&, uint32_t) { out.press_button(mask()); }
 
@@ -181,6 +119,33 @@ void Mousehold::tick(ToolCtx&, uint32_t) {
   if (out.buttons != mask()) {
     out.release_button(0xFF);
     out.press_button(mask());
+  }
+}
+
+// --- Registry ---
+
+#ifdef MACROPAD_SELFTEST
+constexpr uint8_t TEST_BUTTON = 0x80;  // mouse button 8: harmless in the user's session
+#else
+constexpr uint8_t TEST_BUTTON = 0;
+#endif
+
+Tool* tool_for_kind(uint8_t kind) {
+  static Autoclicker click(TEST_BUTTON);
+  static Jitter jitter;
+  static Keyspam spam;
+  static Mousehold hold(TEST_BUTTON);
+  switch (kind) {
+    case TK_CLICK:
+      return &click;
+    case TK_JITTER:
+      return &jitter;
+    case TK_SPAM:
+      return &spam;
+    case TK_HOLD:
+      return &hold;
+    default:
+      return nullptr;
   }
 }
 

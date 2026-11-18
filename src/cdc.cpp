@@ -39,11 +39,22 @@ constexpr uint32_t HOLD_HID_MAX_US = 1500;
 bool hid_idle = true;
 uint32_t tx_started_us = 0;
 
+uint32_t calls = 0;  // CDC endpoint calls, for the self-test's normal-mode check
+
 struct TinyCdc : CdcPort {
-  bool connected() override { return tud_cdc_n_connected(0); }
-  uint32_t available() override { return tud_cdc_n_available(0); }
-  uint32_t read(uint8_t* b, uint32_t n) override { return tud_cdc_n_read(0, b, n); }
+  // Raw DTR from the line state: tud_cdc_n_connected() also goes false on
+  // suspend, which is a USB event, not a session break.
+  bool connected() override { return tud_cdc_n_get_line_state(0) & 1; }
+  uint32_t available() override {
+    calls++;
+    return tud_cdc_n_available(0);
+  }
+  uint32_t read(uint8_t* b, uint32_t n) override {
+    calls++;
+    return tud_cdc_n_read(0, b, n);
+  }
   uint32_t write_available() override {
+    calls++;
     uint8_t ep = cdc_in_ep();
     if (!ep || !tud_ready() || usbd_edpt_busy(0, ep) || !usb_in_idle()) return 0;
     if (!hid_idle || micros() - usb_last_hid_us() < HID_QUIET_US) return 0;
@@ -58,6 +69,7 @@ struct TinyCdc : CdcPort {
       tx_started_us = micros();
   }
   void purge() override {
+    calls++;
     tud_cdc_n_read_flush(0);
     tud_cdc_n_write_clear(0);
   }
@@ -75,6 +87,19 @@ uint32_t text_len = 0;
 void cdc_begin() { Serial.end(); }
 
 void cdc_set_hid_idle(bool idle) { hid_idle = idle; }
+
+void cdc_line_state(bool& dtr, bool& rts) {
+  uint8_t s = tud_cdc_n_get_line_state(0);
+  dtr = s & 1;
+  rts = s & 2;
+}
+
+uint32_t cdc_call_count() { return calls; }
+
+bool cdc_tx_busy() {
+  uint8_t ep = cdc_in_ep();
+  return ep && usbd_edpt_busy(0, ep);
+}
 
 bool cdc_tx_holds_hid(uint32_t now_us) {
   uint8_t ep = cdc_in_ep();

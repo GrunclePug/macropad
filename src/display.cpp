@@ -110,6 +110,36 @@ void print_right(const char* s, int y) {
   canvas->print(s);
 }
 
+const char* title(const Core& c) {
+  if (c.in_menu()) return "Menu";
+  switch (c.screen()) {
+    case Core::Screen::Keys:
+      return c.variant().keymaps[c.set()].name;
+    case Core::Screen::SetList:
+      return "Key sets";
+    case Core::Screen::Tool:
+      return c.variant().tools[c.tool()]->schema().name;
+    case Core::Screen::Configure:
+      return c.recovery() ? "Recovery" : "Configure";
+  }
+  return "";
+}
+
+void list(const char* const* names, uint8_t n, uint8_t cur, int y) {
+  GFXcanvas1& g = *canvas;
+  constexpr uint8_t ROWS = 6;
+  uint8_t first = cur >= ROWS ? cur - ROWS + 1 : 0;
+  for (uint8_t i = first; i < n && i < first + ROWS; i++, y += 8) {
+    if (i == cur) {
+      g.fillRect(0, y - 1, W, 9, 1);
+      g.setTextColor(0);
+    }
+    g.setCursor(2, y);
+    g.print(names[i]);
+    g.setTextColor(1);
+  }
+}
+
 void render(const Core& c, uint32_t now) {
   const Variant& v = c.variant();
   GFXcanvas1& g = *canvas;
@@ -120,13 +150,14 @@ void render(const Core& c, uint32_t now) {
 
   // Top bar: screen name, then status on the right.
   g.setCursor(0, 0);
-  g.print(c.in_menu() ? "Menu" : c.entry_name(c.shown()));
+  g.print(title(c));
   char status[16];
   uint8_t n = 0;
   if (!c.usb_up()) status[n++] = '?';
+  if (c.unsaved()) status[n++] = '!';  // "Default (not saved)"
   for (uint8_t t = 0; t < v.ntools && n < 10; t++) {
     if (!c.enabled(t)) continue;
-    char ch = v.tools[t]->name[0];
+    char ch = v.tools[t]->schema().name[0];
     status[n++] = c.active(t) ? ch : (char)(ch | 0x20);  // armed: lower case
   }
   status[n] = 0;
@@ -147,44 +178,59 @@ void render(const Core& c, uint32_t now) {
   }
 
   if (c.in_menu()) {
-    constexpr uint8_t ROWS = 6;
-    uint8_t first = c.cursor() >= ROWS ? c.cursor() - ROWS + 1 : 0;
-    for (uint8_t i = first; i < v.nentries && i < first + ROWS; i++, y += 8) {
-      if (i == c.cursor()) {
-        g.fillRect(0, y - 1, W, 9, 1);
-        g.setTextColor(0);
+    const char* names[MAX_TOOLS + 2];
+    for (uint8_t i = 0; i < c.menu_items(); i++) names[i] = c.menu_name(i);
+    list(names, c.menu_items(), c.cursor(), y);
+    return;
+  }
+
+  switch (c.screen()) {
+    case Core::Screen::SetList: {
+      const char* names[MAX_KEYMAPS];
+      for (uint8_t i = 0; i < v.nkeymaps; i++) names[i] = v.keymaps[i].name;
+      list(names, v.nkeymaps, c.list_cursor(), y);
+      return;
+    }
+    case Core::Screen::Configure:
+      g.setCursor(0, 24);
+      g.print(c.status());
+      if (c.unsaved()) {
+        g.setCursor(0, H - 8);
+        g.print("Default (not saved)");
       }
-      g.setCursor(2, y);
-      g.print(c.entry_name(i));
-      g.setTextColor(1);
-    }
-    return;
-  }
-
-  const Entry& e = v.entries[c.shown()];
-  if (e.tool) {
-    Tool* t = v.tools[e.index];
-    g.setCursor(0, y);
-    g.print(c.active(e.index) ? "Running" : c.enabled(e.index) ? "Armed" : "Off");
-    y += 10;
-    size_t np;
-    const Param* p = t->params(np);
-    for (size_t i = 0; i < np && y < H; i++, y += 9) {
+      return;
+    case Core::Screen::Tool: {
+      uint8_t ti = c.tool();
+      Tool* t = v.tools[ti];
+      const ToolSchema& s = t->schema();
       g.setCursor(0, y);
-      g.print(i == c.focus() ? ">" : " ");
-      g.print(p[i].label);
-      char val[16];
-      if (p[i].names)
-        snprintf(val, sizeof val, "%s", p[i].names[*p[i].value]);
-      else
-        snprintf(val, sizeof val, "%ld %s", (long)*p[i].value, p[i].unit);
-      print_right(val, y);
+      g.print(c.active(ti) ? "Running" : c.enabled(ti) ? "Armed" : "Off");
+      y += 10;
+      for (uint8_t i = 0; i < s.nparams && y < H; i++, y += 9) {
+        const ParamDef& d = s.params[i];
+        int32_t x = t->slot() ? t->slot()[i] : 0;
+        g.setCursor(0, y);
+        g.print(i == c.focus() ? ">" : " ");
+        g.print(d.label);
+        char val[16];
+        if (d.kind == P_CHOICE)
+          snprintf(val, sizeof val, "%s", d.names[x]);
+        else if (d.kind == P_KEY && key_name((uint8_t)x))
+          snprintf(val, sizeof val, "%s", key_name((uint8_t)x));
+        else if (d.kind == P_KEY)
+          snprintf(val, sizeof val, "0x%02lX", (long)x);
+        else
+          snprintf(val, sizeof val, "%ld %s", (long)x, d.unit);
+        print_right(val, y);
+      }
+      return;
     }
-    return;
+    case Core::Screen::Keys:
+      break;
   }
 
-  const Keymap& km = v.keymaps[e.index];
-  if (!km.legend && c.live(e.index)) {
+  const Keymap& km = v.keymaps[c.set()];
+  if (!km.legend && c.live(c.set())) {
     // Live keys: [ ] or [#] per key being sent, at the size of the
     // low-latency letters, rows of four. At text size 2 "[#]" would be 36 px
     // wide, so the glyphs are placed by hand: '[' and ']' are narrow (ink in
@@ -252,8 +298,7 @@ void display_service(const Core& c, uint32_t now, bool force) {
   bool banner = c.banner(now) != nullptr;
   // Key presses only redraw on a keymap with live keys shown.
   const Variant& v = c.variant();
-  const Entry& e = v.entries[c.shown()];
-  bool live = c.keymap_live() && !v.keymaps[e.index].legend && c.live(e.index);
+  bool live = c.keymap_live() && !v.keymaps[c.set()].legend && c.live(c.set());
   uint8_t held = live ? c.held_keys() : 0;
   if (!force && c.version() == drawn_version && banner == drawn_banner && held == drawn_held) return;
   if (!force && now - drawn_at < FRAME_MS) return;

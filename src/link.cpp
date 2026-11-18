@@ -23,6 +23,11 @@ bool Link::watch() {
   return broke;
 }
 
+void Link::start() {
+  reset();
+  connected_ = port_.connected();
+}
+
 void Link::usb_break() {
   connected_ = false;
   reset();

@@ -8,8 +8,7 @@ namespace mp {
 constexpr uint8_t MAX_KEYS = 8;     // main key switches
 constexpr uint8_t MAX_BUTTONS = 3;  // small buttons plus the encoder push
 constexpr uint8_t MAX_TOOLS = 8;
-constexpr uint8_t MAX_KEYMAPS = 4;
-constexpr uint8_t MAX_ENTRIES = MAX_TOOLS + MAX_KEYMAPS;
+constexpr uint8_t MAX_KEYMAPS = 6;
 
 enum class Ev : uint8_t {
   Press,    // key or button went down

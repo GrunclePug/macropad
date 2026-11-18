@@ -19,6 +19,11 @@ Link& cdc_link();
 // - a HID report waits while a serial packet is in flight, for at most 1.5 ms,
 //   so a host that never reads can't hold keys back
 void cdc_set_hid_idle(bool idle);
+// The raw control lines, for the knock (a variable read, no endpoint traffic).
+void cdc_line_state(bool& dtr, bool& rts);
+// True while a CDC IN transfer is still in flight.
+bool cdc_tx_busy();
+uint32_t cdc_call_count();  // CDC endpoint calls so far (self-test)
 bool cdc_tx_holds_hid(uint32_t now_us);
 
 // Paced text: buffered (16 KB) and drained into the link's log as room allows,
