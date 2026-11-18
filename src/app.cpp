@@ -192,9 +192,12 @@ void enter_config(bool recovery, bool by_knock = false) {
   size_t n = recovery || !flushed ? 0 : store_read(env.staging);
   if (recovery)
     stage_default();
-  else if (n != CFG_SIZE || config_validate(env.staging, n).code)
+  else if (n != CFG_SIZE || config_validate(env.staging, n).code) {
+    // A record that validated before (at boot, or at a save) and now can't
+    // be read back: the same flash fault as after a failed commit.
+    if (n && env.has_crc) crc_from_flash(env.staging, n);
     config_encode(cfg, env.staging);
-  else {
+  } else {
     // Staging is the stored record: HELLO reports exactly its crc, so what
     // a client reads and the crc it's told always agree.
     env.has_crc = true;

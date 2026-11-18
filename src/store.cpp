@@ -36,7 +36,7 @@ void store_begin() { open_ = prefs.begin(NS, false); }
 // Preferences reports any lookup error as "no key", which would let a save
 // replace a record that is there but can't be read; here an error reads as
 // unreadable (SIZE_MAX).
-size_t stored_length() {
+static size_t stored_length() {
   nvs_handle_t h;
   esp_err_t e = nvs_open(NS, NVS_READONLY, &h);
   if (e == ESP_ERR_NVS_NOT_FOUND) return 0;
@@ -49,14 +49,12 @@ size_t stored_length() {
 }
 
 size_t store_read(uint8_t* buf) {
-  // Preferences didn't open: reads as none, harmlessly, since every write
-  // fails too (E_WRITE).
-  if (!open_) return 0;
   size_t n = stored_length();
   if (n == 0) return 0;
-  if (n > CFG_SIZE) {
-    // Too long, or its length can't be read: invalid, never "absent", which
-    // would allow a save over it. The zeroed buffer fails validation.
+  if (n > CFG_SIZE || !open_) {
+    // Too long, its length can't be read, or Preferences didn't open:
+    // invalid, never "absent", which would allow a save over it. The zeroed
+    // buffer fails validation.
     memset(buf, 0, CFG_SIZE);
     return n == SIZE_MAX ? 1 : n;
   }
