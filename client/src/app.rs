@@ -297,17 +297,7 @@ impl App {
                 merged
             }
             Ok((merged, conflicts)) => {
-                let fields: Vec<String> = conflicts
-                    .iter()
-                    .map(|&o| crate::config::field_at(o))
-                    .collect();
-                let mut fields = fields;
-                fields.dedup();
-                self.notice = Some(format!(
-                    "Your unsaved edits are kept on top of the pad's current setup, but the pad also changed {}: \
-                     Save would replace those with your values.",
-                    fields.join(", ")
-                ));
+                self.notice = Some(conflict_notice(&old, &conflicts));
                 merged
             }
             Err(_) => {
@@ -862,6 +852,38 @@ fn empty_config() -> Config {
     }
 }
 
+/// What a rebase with conflicts tells the user, by kind.
+fn conflict_notice(base: &Config, conflicts: &[usize]) -> String {
+    use crate::config::DROPPED_SET;
+    let mut parts =
+        vec!["Your unsaved edits are kept on top of the pad's current setup".to_string()];
+    for &o in conflicts.iter().filter(|&&o| o >= DROPPED_SET) {
+        let name = base
+            .sets
+            .get(o - DROPPED_SET)
+            .map_or("a key set", |s| s.name.as_str());
+        parts.push(format!(
+            "{name} was removed on the pad, so your edits to it were dropped"
+        ));
+    }
+    if conflicts.contains(&67) {
+        parts.push("the key sets changed on both sides, so your set list is kept".into());
+    }
+    let mut fields: Vec<String> = conflicts
+        .iter()
+        .filter(|&&o| o < DROPPED_SET && o != 67)
+        .map(|&o| crate::config::field_at(o))
+        .collect();
+    fields.dedup();
+    if !fields.is_empty() {
+        parts.push(format!(
+            "the pad also changed {}, and Save would replace those with your values",
+            fields.join(", ")
+        ));
+    }
+    parts.join("; ") + "."
+}
+
 /// Remove a key set, keeping the start-up set on the same set (by identity):
 /// a later set moves down a slot; removing the start-up set picks the first.
 fn remove_set(cfg: &mut Config, i: usize) {
@@ -1326,5 +1348,14 @@ mod tests {
         };
         a.on_connect(session);
         assert_eq!(a.cfg, on, "no unsaved edits: the pad's setup is shown");
+    }
+
+    #[test]
+    fn the_notice_says_which_set_the_pad_removed() {
+        let base = builtin("pad").expect("pad"); // osu!mania, Stream, Media
+        let n = conflict_notice(&base, &[crate::config::DROPPED_SET + 1, 62]);
+        assert!(n.contains("Stream was removed on the pad"), "{n}");
+        assert!(n.contains("release debounce"), "{n}");
+        assert!(!n.contains("key set count"), "{n}");
     }
 }

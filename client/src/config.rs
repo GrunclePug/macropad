@@ -427,6 +427,10 @@ fn merge_spans() -> Vec<(usize, usize, bool)> {
     v
 }
 
+/// A `merge3` conflict at `DROPPED_SET + k`: the pad deleted the key set in
+/// slot `k` of the base record, and the editor's edits to it were dropped.
+pub const DROPPED_SET: usize = 0x1_0000;
+
 /// Rebase edits onto a record that changed underneath them, field by field:
 /// a field the editor changed from `base` keeps the editor's value, any other
 /// takes `theirs`; set flags merge bit by bit. Returns the merged record and
@@ -493,9 +497,13 @@ pub fn merge3(base: &[u8], mine: &[u8], theirs: &[u8]) -> Result<(Vec<u8>, Vec<u
         // A set the order's side deleted but the other side edited: the
         // deletion wins, and the lost edit is named.
         let other = if ids(&m) == ids(&b) { &m } else { &t };
-        for (id, bs) in &b {
+        let editor_lost = ids(&m) == ids(&b);
+        for (k, (id, bs)) in b.iter().enumerate() {
             if find(order, id).is_none() && find(other, id).is_some_and(|os| os != *bs) {
-                conflicts.push(COUNT);
+                // The pad's deletion cost the editor's edits: name the set.
+                // The editor's deletion of a set the pad edited is a field
+                // the editor's value replaces, like any other.
+                conflicts.push(if editor_lost { DROPPED_SET + k } else { COUNT });
             }
         }
         order
@@ -930,8 +938,8 @@ mod tests {
             "media never inherits stream's edit"
         );
         assert!(
-            conflicts.contains(&67),
-            "the lost edit is named: {conflicts:?}"
+            conflicts.contains(&(DROPPED_SET + 1)),
+            "the lost edit is named, with its set: {conflicts:?}"
         );
     }
 

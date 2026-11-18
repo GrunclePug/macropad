@@ -414,8 +414,8 @@ impl<P: Ports> State<P> {
         } else if restarted && (h.crc == self.expected_crc || (h.crc.is_none() && h.cfg != "ok")) {
             // Conclusively not landed: after a restart the pad reports its
             // flash, and that's the record read at Connect, or still none.
-            // Without one, HELLO's crc is the pad's RAM copy, which an
-            // E_VERIFY leaves at the old value.
+            // (Settled only after a restart, conservatively: a lost COMMIT
+            // reply leaves the pad up and the outcome unknown until then.)
             self.attempted.clear();
         }
         self.boot = h.boot;
