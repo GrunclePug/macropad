@@ -59,6 +59,8 @@ pub enum Resp {
     Progress(String),
     Connected(Box<Session>),
     Checked,
+    /// A Save whose outcome was unclear did land: the pad holds this record.
+    Landed(Vec<u8>),
     /// The pad rebooted with the new record and is back in normal mode.
     Saved,
     /// The pad refused the record; the editor keeps the edits.
@@ -93,6 +95,7 @@ impl Worker {
                 boot: 0,
                 expected_crc: None,
                 attempted_crc: None,
+                attempted_rec: None,
                 connect_cfg: String::new(),
                 out: resp_tx,
                 wake: Box::new(wake),
@@ -139,6 +142,8 @@ struct State<P: Ports> {
     /// The crc of the record the last Save sent: if its reboot check timed
     /// out but the save landed, the pad holds this one.
     attempted_crc: Option<u32>,
+    /// That Save's record.
+    attempted_rec: Option<Vec<u8>>,
     /// `cfg` at Connect: a pad with no stored record that restarted is the
     /// same session only if this is unchanged.
     connect_cfg: String,
@@ -356,11 +361,15 @@ impl<P: Ports> State<P> {
             bail!("{why}; connect again to load it");
         }
         if h.crc.is_some() && h.crc == self.attempted_crc {
-            // The last Save did land: tell the GUI, so its snapshot follows.
+            // The last Save did land: tell the GUI which record, so its
+            // snapshot follows (not whatever the current request sends).
             self.expected_crc = self.attempted_crc.take();
-            self.emit(Resp::Saved);
+            if let Some(rec) = self.attempted_rec.take() {
+                self.emit(Resp::Landed(rec));
+            }
         } else if h.crc.is_some() && h.crc == self.expected_crc {
             self.attempted_crc = None; // conclusively not landed
+            self.attempted_rec = None;
         }
         self.boot = h.boot;
         self.recovery = h.mode == "recovery";
@@ -390,12 +399,14 @@ impl<P: Ports> State<P> {
         self.client()?.check()?;
         // Until the reboot check decides, the pad may hold this record.
         self.attempted_crc = Some(stored_crc(rec));
+        self.attempted_rec = Some(rec.to_vec());
         self.emit(Resp::Progress("Saving".into()));
         match self.client()?.commit() {
             Ok(_) => {}
             // A refusal is definitive: the record didn't land.
             Err(e) if e.is::<DeviceError>() => {
                 self.attempted_crc = None;
+                self.attempted_rec = None;
                 return Err(e);
             }
             Err(e) => log::warn!("COMMIT: {e:#}"),
@@ -444,6 +455,7 @@ impl<P: Ports> State<P> {
                     self.boot = h.boot;
                     self.expected_crc = Some(want);
                     self.attempted_crc = None;
+                    self.attempted_rec = None;
                     let _ = c.exit();
                     return Ok(());
                 }
@@ -714,11 +726,11 @@ mod tests {
             p.no_reboot = false;
             p.restart();
         }
-        w.send(Req::Check(new));
-        assert!(
-            matches!(next(&w), Resp::Saved),
-            "the GUI learns the Save landed"
-        );
+        w.send(Req::Check(new.clone()));
+        let Resp::Landed(rec) = next(&w) else {
+            panic!("the GUI isn't told the Save landed")
+        };
+        assert_eq!(rec, new, "with the record that landed");
         assert!(
             matches!(next(&w), Resp::Checked),
             "the attempted record counts as known"

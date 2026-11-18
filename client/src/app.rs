@@ -106,6 +106,14 @@ impl App {
                 self.busy = Some(s);
                 return;
             }
+            Resp::Landed(rec) => {
+                // An earlier Save landed after all: that record is what the
+                // pad holds. The request in flight carries on.
+                if let Ok(c) = Config::decode(&rec) {
+                    self.snapshot = Some(c);
+                }
+                return;
+            }
             Resp::Connected(s) => self.on_connect(*s),
             Resp::Checked => {
                 self.error = None;
@@ -229,11 +237,11 @@ impl App {
     fn carry_over(&mut self, pad: &Config) -> Config {
         let same_pad =
             self.snapshot_serial.is_some() && self.snapshot_serial == self.connecting_serial;
-        let Some(old) = self
-            .snapshot
-            .clone()
-            .filter(|old| same_pad && *old != self.cfg)
-        else {
+        let unsaved = self.snapshot.as_ref().is_some_and(|old| *old != self.cfg);
+        let Some(old) = self.snapshot.clone().filter(|_| same_pad && unsaved) else {
+            if unsaved {
+                self.notice = Some("Unsaved edits made for another pad were discarded.".into());
+            }
             return pad.clone();
         };
         if self.cfg == *pad {
@@ -1090,5 +1098,29 @@ mod tests {
         a.handle(Resp::Connected(Box::new(session)));
         assert!(!a.connected(), "Save stays off");
         assert!(a.error.is_some());
+    }
+
+    #[test]
+    fn a_landed_save_found_during_another_save_snapshots_the_landed_record() {
+        let mut a = app();
+        let landed = a.cfg.clone(); // Save A, which timed out but landed
+        let mut b = a.cfg.clone();
+        b.release_ms = 22; // Save B, now in flight
+        a.cfg = b.clone();
+        a.saving = Some(b.clone());
+        a.busy = Some("Saving".into());
+        a.handle(Resp::Landed(landed.encode().expect("encode")));
+        assert_eq!(a.snapshot.as_ref(), Some(&landed), "the pad holds A");
+        assert!(a.busy.is_some(), "the request in flight carries on");
+        a.handle(Resp::Refused(crate::protocol::DeviceError {
+            code: 105,
+            offset: 0,
+            text: "flash write failed".into(),
+        }));
+        assert_ne!(
+            a.snapshot.as_ref(),
+            Some(&a.cfg),
+            "B still shows as unsaved"
+        );
     }
 }

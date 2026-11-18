@@ -375,22 +375,84 @@ pub fn err_name(code: u8) -> &'static str {
     }
 }
 
-/// Rebase edits onto a record that changed underneath them: for each byte
-/// past the header, the editor's value where it differs from `base`,
-/// otherwise `theirs`. Returns the merged record and the offsets both sides
-/// changed differently (the editor's value wins there).
+/// The record's fields past the header as (offset, length, bitwise): each
+/// multi-byte value (a param word, a string, a binding) is one span, and the
+/// set flags bytes merge bit by bit. Everything else is a single byte.
+fn merge_spans() -> Vec<(usize, usize, bool)> {
+    let mut v = Vec::new();
+    let mut at = 16;
+    let push = |v: &mut Vec<(usize, usize, bool)>, at: &mut usize, len: usize, bits: bool| {
+        v.push((*at, len, bits));
+        *at += len;
+    };
+    // Hardware: key count, 8 key pins, 2 buttons (pin, role, reserved,
+    // binding), encoder flags, 3 encoder pins, detent, release, reserved.
+    for _ in 0..9 {
+        push(&mut v, &mut at, 1, false);
+    }
+    for _ in 0..BUTTONS {
+        for _ in 0..3 {
+            push(&mut v, &mut at, 1, false);
+        }
+        push(&mut v, &mut at, 13, false);
+    }
+    for _ in 0..(1 + 3 + 1 + 1 + 4) {
+        push(&mut v, &mut at, 1, false);
+    }
+    // Key sets: count, then per set id, name, flags (bitwise), reserved,
+    // 11 bindings, reserved.
+    push(&mut v, &mut at, 1, false);
+    for _ in 0..SETS {
+        push(&mut v, &mut at, 7, false);
+        push(&mut v, &mut at, 13, false);
+        push(&mut v, &mut at, 1, true);
+        push(&mut v, &mut at, 1, false);
+        for _ in 0..11 {
+            push(&mut v, &mut at, 13, false);
+        }
+        for _ in 0..4 {
+            push(&mut v, &mut at, 1, false);
+        }
+    }
+    // Tools: count, 8 kinds, 64 param words, reserved; state.
+    for _ in 0..9 {
+        push(&mut v, &mut at, 1, false);
+    }
+    for _ in 0..TOOL_SLOTS * PARAM_WORDS {
+        push(&mut v, &mut at, 4, false);
+    }
+    while at < SIZE {
+        push(&mut v, &mut at, 1, false);
+    }
+    v
+}
+
+/// Rebase edits onto a record that changed underneath them, field by field:
+/// a field the editor changed from `base` keeps the editor's value, any other
+/// takes `theirs`; set flags merge bit by bit. Returns the merged record and
+/// the offsets of fields both sides changed differently (the editor's value
+/// wins there).
 pub fn merge3(base: &[u8], mine: &[u8], theirs: &[u8]) -> Result<(Vec<u8>, Vec<usize>)> {
     if base.len() != SIZE || mine.len() != SIZE || theirs.len() != SIZE {
         anyhow::bail!("records of the wrong size");
     }
     let mut out = theirs.to_vec();
     let mut conflicts = Vec::new();
-    for i in 16..SIZE {
-        if mine[i] != base[i] {
-            if theirs[i] != base[i] && theirs[i] != mine[i] {
-                conflicts.push(i);
+    for (at, len, bits) in merge_spans() {
+        let r = at..at + len;
+        if bits {
+            let (b, m, t) = (base[at], mine[at], theirs[at]);
+            let mine_changed = m ^ b;
+            let theirs_changed = t ^ b;
+            out[at] = (m & mine_changed) | (t & !mine_changed);
+            if mine_changed & theirs_changed & (m ^ t) != 0 {
+                conflicts.push(at);
             }
-            out[i] = mine[i];
+        } else if mine[r.clone()] != base[r.clone()] {
+            if theirs[r.clone()] != base[r.clone()] && theirs[r.clone()] != mine[r.clone()] {
+                conflicts.push(at);
+            }
+            out[r.clone()].copy_from_slice(&mine[r]);
         }
     }
     out[12..16].fill(0);
@@ -530,5 +592,68 @@ mod tests {
             "the editor wins"
         );
         assert_eq!(conflicts, [62]);
+    }
+
+    #[test]
+    fn merge3_takes_whole_param_words() {
+        let base = vector("default.hex");
+        let at = |c: &Config| c.params[0][0];
+        let set = |v: i32| {
+            let mut c = Config::decode(&base).expect("decode");
+            c.params[0][0] = v;
+            c.encode().expect("encode")
+        };
+        let b = set(250);
+        // A carry across a byte: 250 -> 506 (FA 01) here, 250 -> 251 there.
+        let (out, conflicts) = merge3(&b, &set(506), &set(251)).expect("merge");
+        assert_eq!(
+            at(&Config::decode(&out).expect("decodes")),
+            506,
+            "never a mix such as 507"
+        );
+        assert_eq!(conflicts, [1091]);
+        // 250 -> 240 here, 250 -> 300 there: the editor's whole value.
+        let (out, _) = merge3(&b, &set(240), &set(300)).expect("merge");
+        assert_eq!(
+            at(&Config::decode(&out).expect("decodes")),
+            240,
+            "never a mix such as 496"
+        );
+        // Only the pad changed it: the pad's value.
+        let (out, conflicts) = merge3(&b, &b, &set(300)).expect("merge");
+        assert_eq!(at(&Config::decode(&out).expect("decodes")), 300);
+        assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn merge3_merges_set_flags_bit_by_bit() {
+        let base = vector("default.hex");
+        let flags = |f: u8| {
+            let mut c = Config::decode(&base).expect("decode");
+            c.sets[0].flags = f;
+            c.encode().expect("encode")
+        };
+        // Base: live only. The editor turns on labels, the pad turns off live.
+        let (out, conflicts) =
+            merge3(&flags(SET_LIVE), &flags(SET_LIVE | SET_LEGEND), &flags(0)).expect("merge");
+        assert_eq!(
+            Config::decode(&out).expect("decodes").sets[0].flags,
+            SET_LEGEND
+        );
+        assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn merge_spans_cover_the_record() {
+        let spans = merge_spans();
+        let mut at = 16;
+        for (start, len, _) in &spans {
+            assert_eq!(*start, at);
+            at += len;
+        }
+        assert_eq!(at, SIZE);
+        assert!(spans.contains(&(1091, 4, false)), "the first param word");
+        assert!(spans.contains(&(68 + 20, 1, true)), "set 1's flags");
+        assert!(spans.contains(&(25 + 3, 13, false)), "button 1's binding");
     }
 }

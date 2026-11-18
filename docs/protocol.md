@@ -188,6 +188,6 @@ Before every Check or Save, the client also confirms it's still talking to the s
 - the pad is opened and reopened only by its USB serial number, never by port name (a port without one can be read and checked, but Save refuses it);
 - a COMMIT refused with `ERR` didn't land; one whose outcome was unclear counts as landed only once a later `HELLO` shows its crc, and the app then marks it saved.
 
-After such a refusal, connecting again to the same pad (same USB serial number) keeps the editor's unsaved edits rebased onto the pad's new setup: each byte the editor changed keeps the editor's value, every other byte takes the pad's. Where both changed the same field, the app says which, and its value wins on Save. Edits never carry over to a different pad.
+After such a refusal, connecting again to the same pad (same USB serial number) keeps the editor's unsaved edits rebased onto the pad's new setup, field by field (each tool param, string and binding is one field; a set's flags merge bit by bit): a field the editor changed keeps the editor's value, every other field takes the pad's. Where both changed the same field, the app names it, and its value wins on Save. Edits never carry over to a different pad; the app says when it drops them.
 
 If saving the pad's own edits fails when config mode starts, `HELLO` reports the crc of the staged record (the edits), so a client that read the old record is refused rather than overwriting them.
