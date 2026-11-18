@@ -45,13 +45,17 @@ struct TinyCdc : CdcPort {
   // Raw DTR from the line state: tud_cdc_n_connected() also goes false on
   // suspend, which is a USB event, not a session break.
   bool connected() override { return tud_cdc_n_get_line_state(0) & 1; }
+  // Nothing touches the CDC endpoints until the host has configured the
+  // device: before that, TinyUSB's CDC interface has no endpoints (number 0),
+  // and a read or purge would re-arm "endpoint 0" and break enumeration.
+  // Recovery mode enters config mode in setup(), before USB is up.
   uint32_t available() override {
     calls++;
-    return tud_cdc_n_available(0);
+    return tud_ready() ? tud_cdc_n_available(0) : 0;
   }
   uint32_t read(uint8_t* b, uint32_t n) override {
     calls++;
-    return tud_cdc_n_read(0, b, n);
+    return tud_ready() ? tud_cdc_n_read(0, b, n) : 0;
   }
   uint32_t write_available() override {
     calls++;
@@ -62,6 +66,7 @@ struct TinyCdc : CdcPort {
     return PACKET;
   }
   uint32_t write(const uint8_t* b, uint32_t n) override {
+    if (!tud_ready()) return 0;
     return tud_cdc_n_write(0, b, n < PACKET ? n : PACKET);
   }
   void flush() override {
@@ -70,6 +75,7 @@ struct TinyCdc : CdcPort {
   }
   void purge() override {
     calls++;
+    if (!tud_ready()) return;  // nothing to purge: mounting resets the FIFOs
     tud_cdc_n_read_flush(0);
     tud_cdc_n_write_clear(0);
   }

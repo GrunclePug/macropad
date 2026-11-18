@@ -3,6 +3,8 @@
 #include "selftest.h"
 
 #include <Arduino.h>
+#include <Preferences.h>
+#include <stdarg.h>
 #include <string.h>
 
 #include "app.h"
@@ -105,29 +107,73 @@ int32_t stored_param(uint8_t kind, uint8_t j) {
   return c.params[kind - 1][j];
 }
 
+// The report survives the restart that ends a full run: the USB-loss check
+// uses a soft detach, after which this core's USB driver is unreliable for CDC
+// traffic, so the script saves its report to NVS and restarts.
+constexpr const char* REPORT_NS = "mp-selftest";
+char saved[3072];
+uint16_t saved_len = 0;
+bool to_saved = false;
+
+void rep(const char* fmt, ...) {
+  char line[Link::MAX_LINE];
+  va_list ap;
+  va_start(ap, fmt);
+  int n = vsnprintf(line, sizeof line, fmt, ap);
+  va_end(ap);
+  if (n < 0) return;
+  if (!to_saved) {
+    text_printf("%s", line);
+    return;
+  }
+  size_t len = strlen(line);
+  if (saved_len + len + 1 > sizeof saved) return;
+  memcpy(saved + saved_len, line, len + 1);
+  saved_len += len + 1;
+}
+
 void report() {
-  text_printf("=== selftest results ===");
+  rep("=== selftest results ===");
   int fails = 0;
   for (uint8_t i = 0; i < nchecks; i++) {
-    text_printf("%s %s", checks[i].pass ? "PASS" : "FAIL", checks[i].name);
+    rep("%s %s", checks[i].pass ? "PASS" : "FAIL", checks[i].name);
     fails += !checks[i].pass;
   }
   if (nlat)
-    text_printf("latency_us n=%d min=%lu p50=%lu p99=%lu max=%lu", nlat, (unsigned long)lat[0],
+    rep("latency_us n=%d min=%lu p50=%lu p99=%lu max=%lu", nlat, (unsigned long)lat[0],
                 (unsigned long)lat[nlat / 2], (unsigned long)p99(), (unsigned long)lat[nlat - 1]);
-  text_printf("chords ok=%d split=%d", chord_ok, chord_split);
-  text_printf("kb_reports=%lu mods_seen=%lu f17_reports=%lu", (unsigned long)kb_reports,
+  rep("chords ok=%d split=%d", chord_ok, chord_split);
+  rep("kb_reports=%lu mods_seen=%lu f17_reports=%lu", (unsigned long)kb_reports,
               (unsigned long)mods_seen, (unsigned long)f17_reports);
-  text_printf("loop max_gap_us=%lu gaps_over_2ms=%lu loops=%lu", (unsigned long)stats.max_gap_us,
+  rep("loop max_gap_us=%lu gaps_over_2ms=%lu loops=%lu", (unsigned long)stats.max_gap_us,
               (unsigned long)stats.gaps_over_2ms, (unsigned long)stats.loops);
-  text_printf("input_dropped=%lu hid_overflows=%lu display_online=%d", (unsigned long)input.dropped(),
+  rep("input_dropped=%lu hid_overflows=%lu display_online=%d", (unsigned long)input.dropped(),
               (unsigned long)hid.overflows(), display_online());
-  text_printf("=== %d checks, %d failed ===", nchecks, fails);
+  rep("=== %d checks, %d failed ===", nchecks, fails);
 }
 
 }  // namespace
 
-void selftest_begin() { hid.on_keys_sent = on_keys; }
+void selftest_begin() {
+  hid.on_keys_sent = on_keys;
+  text_printf("selftest: boot, reset reason %d", (int)esp_reset_reason());
+  // A report saved before the restart that ended the last run: hand it out
+  // at the next knock instead of running again.
+  Preferences p;
+  if (!p.begin(REPORT_NS, false)) return;
+  size_t n = p.getBytesLength("report");
+  if (n && n <= sizeof saved && p.getBytes("report", saved, n) == n) {
+    for (size_t at = 0; at < n;) {
+      size_t len = strnlen(saved + at, n - at);
+      text_printf("%.*s", (int)len, saved + at);
+      at += len + 1;
+    }
+    text_printf("selftest: done (knock to read)");
+    pc = DONE;
+  }
+  if (n) p.remove("report");
+  p.end();
+}
 
 void selftest_restart() {
   pc = 0;
@@ -383,10 +429,21 @@ void selftest_step(uint32_t now) {
       check("no modifier ever sent", mods_seen == 0);
       running = false;
       pins_release_all();
-      display_service(core, now, true);
-      // Fall through to the report, read by knocking into config mode.
-      __attribute__((fallthrough));
-    case REPORT:
+      // Save the report and restart (see saved_magic); the next boot hands
+      // it out when the host knocks.
+      to_saved = true;
+      saved_len = 0;
+      report();
+      {
+        Preferences p;
+        if (p.begin(REPORT_NS, false)) {
+          p.putBytes("report", saved, saved_len);
+          p.end();
+        }
+      }
+      ESP.restart();
+      return;
+    case REPORT:  // stopped early by a mode change: report in config mode
       report();
       text_printf("--- last frame (for a human to look at) ---");
       display_dump();

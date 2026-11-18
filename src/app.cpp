@@ -38,12 +38,13 @@ Proto proto(env);
 Knock knock;
 
 // Leaving config mode: wait for a CDC IN transfer still in flight before key
-// output resumes (the core's USB driver can't interleave CDC and HID); if the
-// host never reads it, reset USB to clear the endpoint.
-enum class Leave : uint8_t { None, Draining, Detached } leaving = Leave::None;
+// output resumes (the core's USB driver can't interleave CDC and HID). If the
+// host never reads it, restart: a soft USB detach would clear the endpoint,
+// but leaves this core's driver unreliable for later CDC traffic.
+enum class Leave : uint8_t { None, Draining } leaving = Leave::None;
 uint32_t leave_at = 0;
 const char* leave_msg = "";
-constexpr uint32_t DRAIN_MS = 500, DETACH_MS = 200;
+constexpr uint32_t DRAIN_MS = 500;
 constexpr uint32_t IDLE_CANCEL_MS = 60000;
 // Config mode entered by a knock leaves if no app speaks within this time.
 constexpr uint32_t HANDSHAKE_MS = 10000;
@@ -150,7 +151,7 @@ void serve_config(uint32_t now) {
       core.set_status(proto.got_valid() ? "App connected" : "Waiting for app");
     }
   }
-  text_service();
+  if (leaving == Leave::None) text_service();  // a leave drains, it doesn't refill
   l.service();
 }
 
@@ -162,16 +163,8 @@ void finish_leave(uint32_t now) {
       knock.reset();
       core.notice(leave_msg, now, 1500);
     } else if (now - leave_at > DRAIN_MS) {
-      usb_detach(true);
-      leaving = Leave::Detached;
-      leave_at = now;
+      ESP.restart();  // boots with every tool off
     }
-  } else if (leaving == Leave::Detached && now - leave_at > DETACH_MS) {
-    usb_detach(false);
-    leaving = Leave::None;
-    core.leave_config();
-    knock.reset();
-    core.notice(leave_msg, now, 1500);
   }
 }
 
