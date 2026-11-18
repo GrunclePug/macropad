@@ -393,7 +393,9 @@ impl<P: Ports> State<P> {
         // `cfg none`, recovery is `invalid N`; so this holds across reconnects.)
         let unverified = h.cfg == "ok" && h.crc.is_none();
         let refuse = if unverified {
-            Some("the pad can't confirm its stored setup right now")
+            Some(
+                "the pad can't read its stored setup back (a flash fault): unplug it and plug it back in, then",
+            )
         } else if changed {
             Some("the pad's saved setup changed since Connect (edited on the pad?)")
         } else if restarted && !(h.cfg == "ok" && known) && !nothing_stored {
