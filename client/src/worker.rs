@@ -1006,4 +1006,26 @@ mod tests {
         };
         assert!(m.contains("couldn't confirm"), "{m}");
     }
+
+    #[test]
+    fn connect_refuses_a_record_that_doesnt_match_hellos_crc() {
+        let rec = builtin("pad").expect("pad").encode().expect("encode");
+        let pad = FakePad::new(rec.clone());
+        pad.lock().report_crc = Some(0xDEAD_BEEF); // HELLO describes another record
+        let w = Worker::spawn(FakePorts(pad.clone()), || {});
+        w.send(Req::Connect {
+            path: FAKE_PATH.into(),
+            serial: Some(FAKE_SERIAL.into()),
+        });
+        let Resp::Failed(m) = next(&w) else {
+            panic!("accepted two baselines")
+        };
+        assert!(m.contains("changed while it was being read"), "{m}");
+        assert_eq!(pad.lock().mode, Mode::Normal, "the pad was let go");
+        w.send(Req::Save(rec));
+        let Resp::Failed(m) = next(&w) else {
+            panic!("Save had a target")
+        };
+        assert!(m.contains("not connected"), "{m}");
+    }
 }
