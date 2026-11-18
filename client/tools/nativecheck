@@ -1,0 +1,41 @@
+#!/bin/sh
+# Build release binaries for Linux and the given Windows target, each in a
+# fresh target directory (a new one per run, under $1), with every C/C++
+# compiler replaced by a wrapper that logs its arguments. Fails if any logged
+# call compiled (-c, or a C/C++/asm source argument): the client must be pure
+# Rust. Link-only calls are fine.
+set -eu
+out=$(realpath -m "$1")/$(date +%Y%m%d-%H%M%S)
+windows=$2
+mkdir -p "$out/bin"
+log="$out/calls.log"
+: > "$log"
+for tool in cc gcc clang c++ g++ x86_64-w64-mingw32-gcc x86_64-w64-mingw32-g++; do
+	real=$(command -v "$tool" || true)
+	[ -n "$real" ] || continue
+	cat > "$out/bin/$tool" <<WRAP
+#!/bin/sh
+printf '%s' "$tool" >> "$log"
+for a in "\$@"; do printf ' %s' "\$a" >> "$log"; done
+echo >> "$log"
+exec "$real" "\$@"
+WRAP
+	chmod +x "$out/bin/$tool"
+done
+w=$out/bin
+export PATH="$w:$PATH"
+export CC="$w/cc" CXX="$w/c++" HOST_CC="$w/cc" TARGET_CC="$w/cc"
+export CC_x86_64_unknown_linux_gnu="$w/cc" CXX_x86_64_unknown_linux_gnu="$w/c++"
+export CC_x86_64_pc_windows_gnu="$w/x86_64-w64-mingw32-gcc" CXX_x86_64_pc_windows_gnu="$w/x86_64-w64-mingw32-g++"
+export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER="$w/x86_64-w64-mingw32-gcc"
+cargo build --release --locked --target-dir "$out/linux" > "$out/build-linux.log" 2>&1
+cargo build --release --locked --target "$windows" --target-dir "$out/windows" > "$out/build-windows.log" 2>&1
+calls=$(wc -l < "$log")
+compiles=$(grep -E '(^| )-c( |$)|\.(c|cc|cpp|cxx|S|s)( |$)' "$log" || true)
+echo "$calls compiler calls logged in $log"
+if [ -n "$compiles" ]; then
+	echo "C/C++ was compiled:" >&2
+	echo "$compiles" >&2
+	exit 1
+fi
+echo "no C or C++ compiled"

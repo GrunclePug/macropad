@@ -45,6 +45,10 @@ uint32_t leave_at = 0;
 const char* leave_msg = "";
 constexpr uint32_t DRAIN_MS = 500, DETACH_MS = 200;
 constexpr uint32_t IDLE_CANCEL_MS = 60000;
+// Config mode entered by a knock leaves if no app speaks within this time.
+constexpr uint32_t HANDSHAKE_MS = 10000;
+bool knock_entry = false;
+uint32_t entered_ms = 0;
 
 bool restart_armed = false;
 uint32_t restart_at = 0;
@@ -75,7 +79,8 @@ void begin_leave(const char* msg) {
   leaving = Leave::Draining;
   leave_at = millis();
   leave_msg = msg;
-  cdc_link().start();  // drop anything still queued in software
+  // Keep a queued reply (EXIT's OK goes out during the drain); drop logs.
+  cdc_link().drop_logs();
 }
 
 void do_exit() { begin_leave("Config closed"); }
@@ -96,12 +101,18 @@ void do_test(const char* what) {
     delay(1500);
     usb_detach(false);
   }
+  if (!strcmp(what, "run")) {
+    selftest_restart();
+    begin_leave("Self-test");
+  }
 #else
   (void)what;
 #endif
 }
 
-void enter_config(bool recovery) {
+void enter_config(bool recovery, bool by_knock = false) {
+  knock_entry = by_knock;
+  entered_ms = millis();
   core.enter_config(recovery);
   cdc_link().start();
   proto.reset();
@@ -129,6 +140,8 @@ void serve_config(uint32_t now) {
   if (leaving == Leave::None && !restart_armed) proto.step(l);
   if (!core.recovery() && proto.got_valid() && now - proto.last_valid_ms() > IDLE_CANCEL_MS)
     begin_leave("Timed out");
+  // A knock with no app behind it (a crashed client, a stray line toggle).
+  if (knock_entry && !proto.got_valid() && now - entered_ms > HANDSHAKE_MS) begin_leave("No app");
   if (!restart_armed) {
     if (core.recovery()) {
       snprintf(status_text, sizeof status_text, "Error %s: open the app", cfg_status + 8);
@@ -143,9 +156,10 @@ void serve_config(uint32_t now) {
 
 void finish_leave(uint32_t now) {
   if (leaving == Leave::Draining) {
-    if (!cdc_tx_busy()) {
+    if (!cdc_tx_busy() && !cdc_link().output_pending()) {
       leaving = Leave::None;
       core.leave_config();
+      knock.reset();
       core.notice(leave_msg, now, 1500);
     } else if (now - leave_at > DRAIN_MS) {
       usb_detach(true);
@@ -156,6 +170,7 @@ void finish_leave(uint32_t now) {
     usb_detach(false);
     leaving = Leave::None;
     core.leave_config();
+    knock.reset();
     core.notice(leave_msg, now, 1500);
   }
 }
@@ -312,7 +327,7 @@ void app_loop() {
     // Normal mode touches no CDC endpoint: only the line state, for the knock.
     bool dtr, rts;
     cdc_line_state(dtr, rts);
-    if (knock.feed(dtr, rts, now)) enter_config(false);
+    if (knock.feed(dtr, rts, now)) enter_config(false, true);
     store_service(core, cfg, boot.persist, now);  // before a newly shown key screen goes live
   } else {
     serve_config(now);

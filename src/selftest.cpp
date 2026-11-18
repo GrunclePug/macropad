@@ -129,6 +129,18 @@ void report() {
 
 void selftest_begin() { hid.on_keys_sent = on_keys; }
 
+void selftest_restart() {
+  pc = 0;
+  wake = 0;
+  nchecks = 0;
+  nlat = 0;
+  lat_pending = chord_pending = false;
+  chord_ok = chord_split = 0;
+  kb_reports = mods_seen = f17_reports = f13_reports = 0;
+  stats.measuring = false;
+  stats.max_gap_us = stats.gaps_over_2ms = stats.loops = 0;
+}
+
 void selftest_step(uint32_t now) {
   static uint8_t K[4], KILL, NAV;
   static int i, j;
@@ -359,7 +371,8 @@ void selftest_step(uint32_t now) {
       WAIT(100);
       TAP(KILL);
       HOLD(NAV);
-      for (i = 0; i < 4; i++) {
+      // Up to Keys, however many menu items there are (Configure is last).
+      for (i = 0; i < 12 && core.cursor() != 0; i++) {
         TAP(K[0]);
       }
       TAP(K[2]);

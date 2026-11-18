@@ -115,6 +115,20 @@ TEST(knock_pattern) {
   // DTR alone toggling (RTS low): never.
   k.feed(false, false, t += 10);
   CHECK(!k.feed(true, false, t += 500));
+  // Windows opens with both lines low: (0,0), then RTS up, then DTR up.
+  k.reset();
+  CHECK(!k.feed(false, false, t += 10));
+  CHECK(!k.feed(false, true, t += 10));
+  CHECK(!k.feed(false, true, t += 500));
+  CHECK(k.feed(true, true, t += 1));
+  // A close (both low) in the middle of the low phase: not a knock.
+  CHECK(!k.feed(false, true, t += 10));
+  CHECK(!k.feed(false, false, t += 400));
+  CHECK(!k.feed(true, true, t += 100));
+  // A low phase already under way at the first sample counts from there.
+  k.reset();
+  CHECK(!k.feed(false, true, t += 10));
+  CHECK(k.feed(true, true, t += 300));
 }
 
 // --- Protocol ---
@@ -168,8 +182,7 @@ struct ProtoRig {
     cdc.out.clear();
     cdc.in += cmd + "\n";
     for (int i = 0; i < 200; i++) {
-      link.poll();
-      proto.step(link);
+      proto.step(link);  // reads the link itself, as on the pad
       link.service();
     }
     return cdc.out;

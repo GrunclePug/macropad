@@ -40,7 +40,7 @@ class Link {
   // Report a USB-level break (unmount, re-enumeration).
   void usb_break();
 
-  // Read input (call every loop in config mode, every 10 ms in normal mode).
+  // Read input (Proto::step calls it every loop in config mode).
   void poll();
   // A complete line, if one is ready and no reply is pending. The newline and
   // a trailing \r are removed. Returns nullptr otherwise. The pointer stays
@@ -66,6 +66,11 @@ class Link {
   void service();
 
   bool reply_pending() const { return reply_len_ > 0; }
+  // Anything left to send (a reply, or a log line).
+  bool output_pending() const { return reply_len_ > 0 || log_len_ > 0; }
+  // Drop log lines that haven't started (leaving config mode: a reply such
+  // as EXIT's OK still goes out).
+  void drop_logs() { log_len_ = log_inflight_; }
   bool connected() const { return connected_; }
   uint32_t stalls() const { return stalls_; }  // polls with reply bytes pending and no TX room
   void count_stalls(bool on) { counting_ = on; }

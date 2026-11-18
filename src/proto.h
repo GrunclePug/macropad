@@ -30,7 +30,8 @@ struct ProtoEnv {
 class Proto {
  public:
   explicit Proto(ProtoEnv& env) : env_(env) {}
-  // Call every loop in config and recovery mode.
+  // Call every loop in config and recovery mode: reads the link, then
+  // handles at most one line.
   void step(Link& link);
   // A valid command has arrived since the last reset (the client is
   // "connected" for the cancel rules).

@@ -89,6 +89,7 @@ bool Proto::gen_line(char* out) {
 }
 
 void Proto::step(Link& link) {
+  link.poll();
   if (gen_ != NONE) {
     char line[Link::MAX_LINE];
     while (gen_ != NONE) {
@@ -194,6 +195,7 @@ void Proto::handle(char* line, Link& link) {
     if (!strcmp(cmd, "TESTCORRUPT")) env_.test("corrupt");
     if (!strcmp(cmd, "TESTCRASH")) env_.test("crash");
     if (!strcmp(cmd, "TESTDETACH")) env_.test("detach");
+    if (!strcmp(cmd, "TESTRUN")) env_.test("run");
     return;
   }
   err(link, E_MODE, 0, "unknown command");

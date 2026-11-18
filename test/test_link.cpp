@@ -144,6 +144,22 @@ TEST(link_counts_stalls_only_when_asked) {
   CHECK(l.stalls() == 2);
 }
 
+// Leaving config mode: a queued reply (EXIT's OK) still goes out, unstarted
+// logs don't, and nothing is pending afterwards.
+TEST(link_leaving_keeps_the_reply) {
+  FakeCdc c;
+  Link l(c);
+  l.watch();
+  l.log("one");
+  l.log("two");
+  l.reply("OK");
+  l.log("three");
+  l.drop_logs();
+  CHECK(l.output_pending());
+  CHECK(run(l, c, 4) == "OK\n");
+  CHECK(!l.output_pending());
+}
+
 void run_link_tests() {
   RUN(link_reads_lines_and_strips_cr);
   RUN(link_holds_next_line_while_reply_pending);
@@ -152,4 +168,5 @@ void run_link_tests() {
   RUN(link_logs_only_while_connected);
   RUN(link_session_break_purges);
   RUN(link_counts_stalls_only_when_asked);
+  RUN(link_leaving_keeps_the_reply);
 }

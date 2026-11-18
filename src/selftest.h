@@ -9,5 +9,8 @@ namespace mp {
 
 void selftest_begin();
 void selftest_step(uint32_t now);
+// Run the script again from the start (the TESTRUN command), once the pad is
+// back in normal mode.
+void selftest_restart();
 
 }  // namespace mp
