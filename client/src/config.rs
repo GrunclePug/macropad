@@ -438,8 +438,33 @@ pub fn merge3(base: &[u8], mine: &[u8], theirs: &[u8]) -> Result<(Vec<u8>, Vec<u
     }
     let mut out = theirs.to_vec();
     let mut conflicts = Vec::new();
+    // The pad's set-level changes apply only where the editor still has the
+    // same set in that slot (by id): removing or reordering sets in the
+    // editor must not move a pad-side change onto another set.
+    const SET0: usize = 68;
+    const SET_LEN: usize = 169;
+    let same_set = |k: usize| {
+        let id = SET0 + k * SET_LEN..SET0 + k * SET_LEN + 7;
+        base[67] == mine[67] && base[id.clone()] == mine[id]
+    };
+    let sets_unchanged = (0..SETS).all(same_set);
     for (at, len, bits) in merge_spans() {
         let r = at..at + len;
+        let slot = (SET0..SET0 + SETS * SET_LEN)
+            .contains(&at)
+            .then(|| (at - SET0) / SET_LEN);
+        let theirs_usable = match slot {
+            Some(k) => same_set(k),
+            None if at == 1351 => sets_unchanged, // the start-up set
+            None => true,
+        };
+        if !theirs_usable {
+            if theirs[r.clone()] != base[r.clone()] && theirs[r.clone()] != mine[r.clone()] {
+                conflicts.push(at);
+            }
+            out[r.clone()].copy_from_slice(&mine[r]);
+            continue;
+        }
         if bits {
             let (b, m, t) = (base[at], mine[at], theirs[at]);
             let mine_changed = m ^ b;
@@ -649,6 +674,36 @@ mod tests {
             SET_LEGEND
         );
         assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn merge3_never_moves_a_pad_change_onto_another_set() {
+        let base = vector("default.hex"); // sets: osu, stream, media
+        let mut mine = Config::decode(&base).expect("decode");
+        mine.sets.remove(0); // the editor drops osu: stream moves to slot 0
+        let mut theirs = Config::decode(&base).expect("decode");
+        theirs.sets[0].flags ^= SET_LIVE; // the pad toggles osu's live flag
+        theirs.selected = 2; // and starts on media
+        let (out, conflicts) = merge3(
+            &base,
+            &mine.encode().expect("e"),
+            &theirs.encode().expect("e"),
+        )
+        .expect("merge");
+        let m = Config::decode(&out).expect("decodes");
+        assert_eq!(m.sets[0].id, "stream");
+        assert_eq!(
+            m.sets[0].flags, mine.sets[0].flags,
+            "osu's toggle didn't land on stream"
+        );
+        assert_eq!(
+            m.selected, mine.selected,
+            "the start-up set isn't taken by slot"
+        );
+        assert!(
+            conflicts.contains(&(68 + 20)) && conflicts.contains(&1351),
+            "{conflicts:?}"
+        );
     }
 
     #[test]

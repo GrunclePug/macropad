@@ -272,6 +272,7 @@ impl<P: Ports> State<P> {
         self.boot = hello.boot;
         self.expected_crc = hello.crc;
         self.attempted_crc = None;
+        self.attempted_rec = None;
         self.connect_cfg = hello.cfg.clone();
         self.in_config = true;
         self.client = Some(c);
@@ -397,9 +398,11 @@ impl<P: Ports> State<P> {
             if let Some(rec) = self.attempted_rec.take() {
                 self.emit(Resp::Landed(rec));
             }
-        } else if h.crc == self.expected_crc || (h.crc.is_none() && h.cfg != "ok") {
-            // Conclusively not landed: the record read at Connect, or still
-            // no stored record at all.
+        } else if restarted && (h.crc == self.expected_crc || (h.crc.is_none() && h.cfg != "ok")) {
+            // Conclusively not landed: after a restart the pad reports its
+            // flash, and that's the record read at Connect, or still none.
+            // Without one, HELLO's crc is the pad's RAM copy, which an
+            // E_VERIFY leaves at the old value.
             self.attempted_crc = None;
             self.attempted_rec = None;
         }
@@ -886,12 +889,12 @@ mod tests {
         }
         w.send(Req::Save(new.clone()));
         assert!(matches!(next(&w), Resp::Refused(_)));
-        {
-            let mut p = pad.lock(); // it did land, and the pad restarted
-            p.fail_commit_code = None;
-            p.stored = new.clone();
-            p.restart();
-        }
+        pad.lock().fail_commit_code = None;
+        // No restart yet: HELLO still shows the old crc from RAM, which must
+        // not settle it.
+        w.send(Req::Check(s.record.clone()));
+        assert!(matches!(next(&w), Resp::Checked));
+        pad.lock().restart(); // now it boots on the record that landed
         w.send(Req::Check(new.clone()));
         let Resp::Landed(rec) = next(&w) else {
             panic!("not recognised as landed")
