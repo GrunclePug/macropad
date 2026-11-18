@@ -54,18 +54,18 @@ class Device : public USBHIDDevice {
 
 Device device;
 
-volatile bool disturbed = false;
+bool disturbed = false;  // set from the USB event task, taken atomically
 volatile uint32_t mounts = 0;
 
 void on_usb(void*, esp_event_base_t base, int32_t id, void*) {
   if (base != ARDUINO_USB_EVENTS) return;
   switch (id) {
     case ARDUINO_USB_STARTED_EVENT:
-      if (mounts++ > 0) disturbed = true;  // re-enumerated (bus reset, host reboot)
+      if (mounts++ > 0) __atomic_store_n(&disturbed, true, __ATOMIC_SEQ_CST);  // re-enumerated
       break;
     case ARDUINO_USB_STOPPED_EVENT:
     case ARDUINO_USB_SUSPEND_EVENT:
-      disturbed = true;
+      __atomic_store_n(&disturbed, true, __ATOMIC_SEQ_CST);
       break;
     default:
       break;
@@ -89,11 +89,7 @@ void usb_begin() {
 
 bool usb_up() { return tud_mounted() && !tud_suspended(); }
 
-bool usb_take_disturbed() {
-  if (!disturbed) return false;
-  disturbed = false;
-  return true;
-}
+bool usb_take_disturbed() { return __atomic_exchange_n(&disturbed, false, __ATOMIC_SEQ_CST); }
 
 UsbPort& usb_port() { return port; }
 

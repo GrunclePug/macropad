@@ -22,21 +22,18 @@ constexpr int32_t JITTER_PX = 100;
 
 enum : uint8_t { T_CLICK, T_JITTER, T_SPAM, T_HOLD, NTOOLS };
 
-const KeySet SPAM_SETS[] = {
 #ifdef MACROPAD_SELFTEST
-    {"F17", 0, {key::F17}},
-#endif
+const KeySet SPAM_SETS[] = {{"F17", 0, {key::F17}}};
+const char* const SPAM_NAMES[] = {"F17"};
+#else
+const KeySet SPAM_SETS[] = {
     {"Space", 0, {key::SPACE}},
     {"E", 0, {key::E}},
     {"F", 0, {key::F}},
     {"1", 0, {key::N1}},
 };
-const char* const SPAM_NAMES[] = {
-#ifdef MACROPAD_SELFTEST
-    "F17",
+const char* const SPAM_NAMES[] = {"Space", "E", "F", "1"};
 #endif
-    "Space", "E", "F", "1",
-};
 
 Autoclicker clicker(82, 103, TEST_BUTTON);
 Jitter jitter(JITTER_PX, 4000, 7000);

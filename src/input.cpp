@@ -114,11 +114,16 @@ void Input::push(Ev t, Src s, uint8_t i, int8_t delta) {
 }
 
 bool Input::pop(Event& e) {
-  if (!count_) return false;
-  e = q_[head_];
-  head_ = (head_ + 1) % QLEN;
-  count_--;
-  return true;
+  while (count_) {
+    e = q_[head_];
+    head_ = (head_ + 1) % QLEN;
+    count_--;
+    // A key suppressed after its event was queued (two keys in one scan, the
+    // first changing screens) must not act on the new screen.
+    if (e.src == Src::Key && e.type != Ev::Release && keys_[e.index].suppressed) continue;
+    return true;
+  }
+  return false;
 }
 
 void Input::suppress_held() {

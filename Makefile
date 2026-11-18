@@ -14,6 +14,12 @@ ifeq ($(filter $(VARIANT),$(VARIANTS)),)
 $(error unknown VARIANT '$(VARIANT)'; known: $(VARIANTS))
 endif
 
+ifneq ($(SELFTEST),)
+ifneq ($(VARIANT),pad)
+$(error the self-test is written for VARIANT=pad)
+endif
+endif
+
 DEFINES := -DMACROPAD_VARIANT_$(shell echo $(VARIANT) | tr a-z A-Z)$(if $(SELFTEST), -DMACROPAD_SELFTEST)
 BUILD   := .build/$(VARIANT)$(if $(SELFTEST),-selftest)
 CLI     := arduino-cli compile --warnings all --build-path $(BUILD) \

@@ -76,6 +76,17 @@ void on_keys(const Keys& k) {
   }
 }
 
+void sort_latency() {
+  for (int i = 1; i < nlat; i++)
+    for (int j = i; j > 0 && lat[j] < lat[j - 1]; j--) {
+      uint32_t t = lat[j];
+      lat[j] = lat[j - 1];
+      lat[j - 1] = t;
+    }
+}
+
+uint32_t p99() { return nlat ? lat[(nlat * 99 + 99) / 100 - 1] : 0; }
+
 int tool_index(const char* id) {
   for (uint8_t i = 0; i < VARIANT.ntools; i++)
     if (!strcmp(VARIANT.tools[i]->id, id)) return i;
@@ -89,17 +100,9 @@ void report() {
     Serial.printf("%s %s\n", checks[i].pass ? "PASS" : "FAIL", checks[i].name);
     fails += !checks[i].pass;
   }
-  // Latency percentiles (insertion sort; 200 samples).
-  for (int i = 1; i < nlat; i++)
-    for (int j = i; j > 0 && lat[j] < lat[j - 1]; j--) {
-      uint32_t t = lat[j];
-      lat[j] = lat[j - 1];
-      lat[j - 1] = t;
-    }
   if (nlat)
     Serial.printf("latency_us n=%d min=%lu p50=%lu p99=%lu max=%lu\n", nlat, (unsigned long)lat[0],
-                  (unsigned long)lat[nlat / 2], (unsigned long)lat[(nlat * 99) / 100 - (nlat >= 100 ? 1 : 0)],
-                  (unsigned long)lat[nlat - 1]);
+                  (unsigned long)lat[nlat / 2], (unsigned long)p99(), (unsigned long)lat[nlat - 1]);
   Serial.printf("chords ok=%d split=%d\n", chord_ok, chord_split);
   Serial.printf("kb_reports=%lu mods_seen=%lu f17_reports=%lu\n", (unsigned long)kb_reports,
                 (unsigned long)mods_seen, (unsigned long)f17_reports);
@@ -193,6 +196,12 @@ void selftest_step(uint32_t now) {
         WAIT(40);
       }
       stats.measuring = false;
+      sort_latency();
+      check("every osu press reached a report", nlat == TRIALS);
+      check("latency p99 <= 1 ms (pin to report accepted)", nlat && p99() <= 1000);
+      check("no loop gap over 2 ms", stats.gaps_over_2ms == 0);
+      check("every chord in one report", chord_ok == 20 && chord_split == 0);
+      check("no modifier ever sent", mods_seen == 0);
       check("tools still running after the trials", core.active(click) && core.active(jit));
       check("autoclicker clicked during the trials", ((Autoclicker*)VARIANT.tools[click])->clicks > 10);
 
@@ -215,16 +224,20 @@ void selftest_step(uint32_t now) {
       LIFT(K[0]);
       WAIT(60);
 
-      // --- Killswitch during autoclicker clicks ---
+      // --- Killswitch during autoclicker clicks: press it while a click is down ---
       v = 0;
+      t = 0;
       for (i = 0; i < 20; i++) {
-        WAIT(37 + (i * 13) % 90);
+        for (j = 0; j < 500 && !(hid.sent_buttons() & 0x80); j++) {
+          WAIT(1);
+        }
+        if (hid.sent_buttons() & 0x80) t++;
         TAP(KILL);
         WAIT(20);
         if (!(core.killed() && hid.sent_buttons() == 0 && hid.mouse_idle())) v++;
         TAP(KILL);
       }
-      check("killswitch during clicks leaves no button down (20 tries)", v == 0);
+      check("killswitch during a click leaves no button down (20 tries)", v == 0 && t == 20);
 
       // --- Killswitch hold switches every tool off ---
       PRESS(KILL);
@@ -311,11 +324,12 @@ void selftest_step(uint32_t now) {
       TAP(KILL);
       check("clean up: nothing held", hid.sent_buttons() == 0 && hid.sent_keys().empty());
       display_service(core, now, true);
+      report();
+      Serial.println("--- last frame (for a human to look at) ---");
+      display_dump();
       for (;;) {
-        report();
-        Serial.println("--- frame ---");
-        display_dump();
         WAIT(5000);
+        report();
       }
   }
 }

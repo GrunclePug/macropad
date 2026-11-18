@@ -17,7 +17,11 @@ bool retrying = false;
 }  // namespace
 
 void settings_begin(const Variant& v) {
+#ifdef MACROPAD_SELFTEST
+  open_ = prefs.begin("macropad-test", false);  // never touch the real settings
+#else
   open_ = prefs.begin("macropad", false);
+#endif
   if (!open_) {
     Serial.println("settings: NVS unavailable, using defaults");
     return;

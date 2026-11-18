@@ -52,13 +52,14 @@ void Autoclicker::tick(ToolCtx& c, uint32_t now) {
       return;
     case HOLDING:
       if (now - down_at_ < HOLD_MS) return;
-      out.release_button(mask());
+      out.release_button(0xFF);  // also right if the button setting changed mid-click
       state_ = UP_QUEUED;
       return;
     case UP_QUEUED:
       if (!c.hid.mouse_idle()) return;
       clicks++;
       state_ = IDLE;
+      if (due(now, next_)) next_ = now + c.rng.between(min_, max_);  // fell due mid-click: skip it
       return;
   }
 }
@@ -84,6 +85,7 @@ void Jitter::clamp() {
 void Jitter::start(ToolCtx&, uint32_t now) {
   phase_ = OUT;
   moved_ = 0;
+  cycle_ = dist_;
   next_ = now;
 }
 
@@ -92,11 +94,11 @@ void Jitter::tick(ToolCtx& c, uint32_t now) {
   switch (phase_) {
     case OUT:
     case BACK: {
-      int step = dist_ - moved_ < STEP_PX ? dist_ - moved_ : STEP_PX;
+      int step = cycle_ - moved_ < STEP_PX ? cycle_ - moved_ : STEP_PX;
       c.hid.move(phase_ == OUT ? step : -step, 0);
       moved_ += step;
       next_ = now + STEP_MS;
-      if (moved_ >= dist_) {
+      if (moved_ >= cycle_) {
         moved_ = 0;
         if (phase_ == OUT) {
           phase_ = BACK;
@@ -109,6 +111,7 @@ void Jitter::tick(ToolCtx& c, uint32_t now) {
     }
     case PAUSE:
       phase_ = OUT;
+      cycle_ = dist_;
       return;
   }
 }

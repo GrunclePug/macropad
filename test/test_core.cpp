@@ -153,6 +153,30 @@ TEST(key_that_opens_a_tool_does_not_repeat_into_it) {
   CHECK(r.core.shown() == E_CLICK && *pad::clicker.params(n)[0].value == before);
 }
 
+TEST(two_keys_in_one_scan_from_the_menu_leave_nothing_held) {
+  Rig r(VARIANT);
+  r.hold_button(NAV);
+  r.keys = (1u << 2) | (1u << 3);  // "open" and "back" in the same scan
+  r.run(50);
+  r.keys = 0;
+  r.run(50);
+  CHECK(r.hid.sent_keys().empty());
+}
+
+TEST(killswitch_hold_spanning_a_link_change_keeps_tools_armed) {
+  Rig r(VARIANT);
+  open_entry(r, E_CLICK);
+  r.tap_button(KILL);
+  r.tap_button(NAV);  // armed
+  r.buttons = 1;
+  r.run(100);
+  r.disturbed = true;
+  r.run(900);  // past the hold threshold
+  r.buttons = 0;
+  r.run(20);
+  CHECK(r.core.killed() && r.core.enabled(pad::T_CLICK));
+}
+
 TEST(held_key_released_when_menu_opens) {
   Rig r(VARIANT);
   r.keys = 1;
@@ -225,6 +249,8 @@ void run_core_tests() {
   RUN(held_osu_key_cleared_by_killswitch_and_silent_after);
   RUN(key_that_opens_a_keymap_does_not_type);
   RUN(key_that_opens_a_tool_does_not_repeat_into_it);
+  RUN(two_keys_in_one_scan_from_the_menu_leave_nothing_held);
+  RUN(killswitch_hold_spanning_a_link_change_keeps_tools_armed);
   RUN(held_key_released_when_menu_opens);
   RUN(settings_edit_marks_dirty_and_keymap_flushes);
   RUN(deck_toggle_arms_while_killed);

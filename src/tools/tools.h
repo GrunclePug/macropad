@@ -45,6 +45,7 @@ class Jitter : public Tool {
  private:
   enum Phase : uint8_t { OUT, BACK, PAUSE } phase_ = OUT;
   int32_t dist_, min_, max_;
+  int32_t cycle_ = 0;  // distance for the current cycle, so both legs match
   int32_t moved_ = 0;
   uint32_t next_ = 0;
   Param params_[3];
