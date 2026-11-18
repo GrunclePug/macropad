@@ -98,11 +98,22 @@ def connect(do_knock=True, tries=12):
     return None, None
 
 def back(boot0, do_knock, secs=20):
-    """The pad after a restart: a HELLO with a new boot nonce within secs."""
-    end = time.time() + secs
-    while time.time() < end:
-        s, h = connect(do_knock=do_knock, tries=1)
-        if h and h['boot'] != boot0: return s, h
+    """The pad after a restart: a HELLO with a new boot nonce, all within secs
+    (one deadline). The old port may still be there for the 200 ms before the
+    restart, or vanish mid-HELLO: any serial error just means try again."""
+    end = time.monotonic() + secs
+    while time.monotonic() < end:
+        s = None
+        try:
+            p = find(timeout=max(0.1, end - time.monotonic()))
+            if p:
+                s = opn()
+                h = hello(s)
+                if not h and do_knock:
+                    knock(s); h = hello(s)
+                if h and h['boot'] != boot0: return s, h
+        except Exception:
+            pass
         if s: close(s)
         time.sleep(0.3)
     return None, None

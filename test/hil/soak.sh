@@ -23,9 +23,12 @@ fail() { echo "FAIL $*"; fails=$((fails + 1)); }
 dev() {  # the pad's tty, or nothing (never an unmatched glob)
 	for p in /dev/serial/by-id/*"$SN"*; do [ -e "$p" ] && { readlink -f "$p"; return; }; done
 }
+nup=0
 up() {
-	timeout 20 python3 -I "$H/quiet.py" "$SN" > "$T/quiet.log" 2>&1 || { cat "$T/quiet.log"; fail "config mode before the upload"; return 1; }
-	arduino-cli upload --input-dir "$1" -p "$(dev)" . > "$T/upload.log" 2>&1 || { tail -3 "$T/upload.log"; fail "upload $1"; return 1; }
+	timeout 20 python3 -I "$H/quiet.py" "$SN" > "$T/quiet-$((nup + 1)).log" 2>&1 ||
+		{ cat "$T/quiet-$((nup + 1)).log"; fail "config mode before the upload"; return 1; }
+	nup=$((nup + 1)); ulog="$T/upload-$nup.log"
+	arduino-cli upload --input-dir "$1" -p "$(dev)" . > "$ulog" 2>&1 || { tail -3 "$ulog"; fail "upload $1"; return 1; }
 	for _ in $(seq 1 20); do [ -z "$(dev)" ] && break; sleep 0.25; done
 	for _ in $(seq 1 80); do
 		if [ -n "$(dev)" ]; then
@@ -75,14 +78,14 @@ if up .build/firmware; then
 	$pulled && cmp -s "$T/before.toml" "$T/after.toml" && echo "PASS normal firmware back, the pad's setup unchanged" ||
 		fail "the pad's setup after the soak differs or can't be read"
 fi
-if journalctl -k -n 1 --no-pager > /dev/null 2>&1 && [ -n "$usbpath" ]; then
-	journalctl -k --since "$since" --no-pager > "$T/kernel.log"
+if [ -n "$usbpath" ] && journalctl -k --since "$since" --no-pager > "$T/kernel.log" 2>&1; then
 	usb=$(grep -E 'error -71|device descriptor read|irq status|cannot reset|disabled by hub' "$T/kernel.log" || true)
 	[ -z "$usb" ] || { echo "$usb"; fail "USB errors in the kernel log"; }
 	# An attach that never enumerated: the stuck-restart state (PLAN 9ze), even if it recovered.
-	attached=$(grep -c "usb $usbpath: new .*USB device number" "$T/kernel.log")
-	found=$(grep -c "usb $usbpath: New USB device found" "$T/kernel.log")
+	attached=$(grep -cF "usb $usbpath: new full-speed USB device number" "$T/kernel.log")
+	found=$(grep -cF "usb $usbpath: New USB device found" "$T/kernel.log")
 	echo "USB attaches on $usbpath: $attached, enumerated: $found"
+	[ "$attached" -gt 0 ] || fail "no USB attach on $usbpath in the kernel log: the check saw nothing"
 	[ "$attached" -eq "$found" ] || fail "$((attached - found)) USB attaches never enumerated"
 else
 	fail "can't read the kernel log or the pad's USB path: USB errors unchecked"
