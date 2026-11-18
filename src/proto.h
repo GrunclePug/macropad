@@ -18,6 +18,7 @@ struct ProtoEnv {
   uint32_t stored_crc;
   bool recovery;
   bool selftest;  // TEST* commands allowed
+  const char* sn = nullptr;  // the USB serial number: a client checks it's the pad it meant
   // Actions. commit gets a validated record and returns E_OK, E_WRITE or
   // E_VERIFY; on E_OK the app freezes the pad and restarts it.
   uint8_t (*commit)(const uint8_t* rec);

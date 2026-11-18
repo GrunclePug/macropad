@@ -619,6 +619,14 @@ mod tests {
             240,
             "never a mix such as 496"
         );
+        // The council's example: autoclicker max 103, the app 359, the pad 108.
+        let (out, conflicts) = merge3(&set(103), &set(359), &set(108)).expect("merge");
+        assert_eq!(
+            at(&Config::decode(&out).expect("decodes")),
+            359,
+            "never 364"
+        );
+        assert_eq!(conflicts, [1091]);
         // Only the pad changed it: the pad's value.
         let (out, conflicts) = merge3(&b, &b, &set(300)).expect("merge");
         assert_eq!(at(&Config::decode(&out).expect("decodes")), 300);

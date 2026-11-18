@@ -133,6 +133,9 @@ pub struct Hello {
     pub cfg: String,
     pub crc: Option<u32>,
     pub boot: u32,
+    /// The pad's own USB serial number, so the client can tell which pad
+    /// actually answered on a port.
+    pub sn: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -231,6 +234,7 @@ impl<T: Transport> Client<T> {
             cfg: String::new(),
             crc: None,
             boot: 0,
+            sn: None,
         };
         for (i, f) in ok.split('\t').enumerate() {
             match i {
@@ -242,6 +246,8 @@ impl<T: Transport> Client<T> {
                         h.cfg = v.into();
                     } else if let Some(v) = f.strip_prefix("crc ") {
                         h.crc = u32::from_str_radix(v, 16).ok();
+                    } else if let Some(v) = f.strip_prefix("sn ") {
+                        h.sn = Some(v.into());
                     } else if let Some(v) = f.strip_prefix("boot ") {
                         h.boot = u32::from_str_radix(v, 16).context("boot nonce")?;
                     } else if let Some(v) = f.strip_prefix("proto ")

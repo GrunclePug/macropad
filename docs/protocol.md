@@ -162,7 +162,7 @@ Lines are tab-separated, end in `\n` (a trailing `\r` is ignored) and are at mos
 
 | Command | Reply |
 | --- | --- |
-| `HELLO` | `OK\tmacropad\t<fw>\tproto 1\tmode <config\|recovery>\tcfg <status>\tcrc <8 hex\|none>\tboot <8 hex>` |
+| `HELLO` | `OK\tmacropad\t<fw>\tproto 1\tmode <config\|recovery>\tcfg <status>\tcrc <8 hex\|none>\tboot <8 hex>\tsn <USB serial>` |
 | `PINS` | `PIN\t<code>\t<name>` per pin, then `OK` |
 | `TOOLS` | per kind `TOOL\t<kind>\t<id>\t<name>`, then per param `PARAM\t<kind>\t<index>\t<id>\t<label>\t<number\|choice\|key>\t<min>\t<max>\t<step>\t<unit>\t<names>`, then `OK` |
 | `GET\t<offset>\t<len>` | `DATA\t<hex>` (len ≤ 64) from staging, then `OK` |
@@ -173,7 +173,7 @@ Lines are tab-separated, end in `\n` (a trailing `\r` is ignored) and are at mos
 
 Staging starts as the stored record (or the running setup if none validates; the default in recovery); edits made on the pad and not yet saved are saved first. `boot` is a random number picked at each boot, so a changed value proves a restart. `crc` is the stored record's, kept current when the pad saves its own edits, and `cfg` changes from `none` to `ok` when the first save creates the record.
 
-**Self-test builds only:** `TESTCORRUPT` stores a record with a bad CRC and restarts; `TESTCRASH` aborts; `TESTDETACH` drops off USB for 1.5 s; `TESTRUN` leaves config mode and runs the self-test again; `TESTTAP` taps Nav once the pad is back in normal mode (an unsaved pad edit, for testing the save on entry); `TESTACK` confirms the self-test report was read (until then it's re-sent at every config entry); `TESTERASE` removes the stored record and restarts (a fresh pad; `TESTERASE\tnorun` also keeps the self-test from starting on that boot).
+**Self-test builds only:** `TESTCORRUPT` stores a record with a bad CRC and restarts; `TESTCRASH` aborts; `TESTDETACH` drops off USB for 1.5 s; `TESTRUN` leaves config mode and runs the self-test again (config mode only, like `TESTTAP` and `TESTACK`); `TESTTAP` taps Nav once the pad is back in normal mode (an unsaved pad edit, for testing the save on entry); `TESTACK` confirms the self-test report was read (until then it's re-sent at every config entry); `TESTERASE` removes the stored record and restarts (a fresh pad; `TESTERASE\tnorun` also keeps the self-test from starting on that boot).
 
 ### Saving, as the client does it
 
@@ -185,8 +185,8 @@ Staging starts as the stored record (or the running setup if none validates; the
 Before every Check or Save, the client also confirms it's still talking to the same session:
 - any reported crc must be the one read at Connect, or the crc of the last Save (one whose reboot check timed out may still have landed); anything else was edited on the pad (a fresh pad whose save on entry failed reports its edits' crc while still `cfg none`), and the client refuses and asks to connect again;
 - a restart in between (a changed `boot`) is accepted with such a known record, or when there was no stored record then or now (`crc none`) and `cfg` is what it was at Connect (a fresh pad, or one in recovery);
-- the pad is opened and reopened only by its USB serial number, never by port name (a port without one can be read and checked, but Save refuses it);
-- a COMMIT refused with `ERR` didn't land; one whose outcome was unclear counts as landed only once a later `HELLO` shows its crc, and the app then marks it saved.
+- the pad is opened and reopened only by its USB serial number, never by port name, and the `sn` in its `HELLO` must match before anything is written (a port name can change hands between finding it and opening it); a port without a serial number can be read and checked, but Save refuses it;
+- a COMMIT refused with `ERR` didn't land, except `E_VERIFY` (the write happened, its read-back differed); one whose outcome was unclear counts as landed only once a later `HELLO` shows its crc, and the app then marks that record saved. A `HELLO` showing the Connect crc, or still no stored record, settles it as not landed.
 
 After such a refusal, connecting again to the same pad (same USB serial number) keeps the editor's unsaved edits rebased onto the pad's new setup, field by field (each tool param, string and binding is one field; a set's flags merge bit by bit): a field the editor changed keeps the editor's value, every other field takes the pad's. Where both changed the same field, the app names it, and its value wins on Save. Edits never carry over to a different pad; the app says when it drops them.
 

@@ -203,6 +203,9 @@ TEST(proto_hello_get_put_check_commit) {
   ProtoRig r;
   std::string h = r.ask("HELLO");
   CHECK(h == "OK\tmacropad\t0.3.0\tproto 1\tmode config\tcfg ok\tcrc 00001234\tboot deadbeef\n");
+  r.env.sn = "DCDA0C20EF54";
+  CHECK(r.ask("HELLO") == "OK\tmacropad\t0.3.0\tproto 1\tmode config\tcfg ok\tcrc 00001234\tboot deadbeef\tsn DCDA0C20EF54\n");
+  r.env.sn = nullptr;
   CHECK(r.proto.got_valid());
   std::string g = r.ask("GET\t0\t4");
   CHECK(g == "DATA\t4d504331\nOK\n");  // "MPC1"
@@ -251,6 +254,10 @@ TEST(proto_errors_and_pacing) {
   CHECK(r.ask("EXIT") == "OK\n" && exits == 1);
   r.env.recovery = true;
   CHECK(r.ask("EXIT").find("ERR\t101") == 0);
+  // Self-test commands that need normal mode afterwards: not in recovery.
+  r.env.selftest = true;
+  CHECK(r.ask("TESTRUN").find("ERR\t101") == 0 && r.ask("TESTTAP").find("ERR\t101") == 0 &&
+        r.ask("TESTACK").find("ERR\t101") == 0);
 }
 
 void run_config_tests() {

@@ -244,6 +244,12 @@ impl<P: Ports> State<P> {
         let mut c = Client::new(self.ports.open(path)?);
         self.emit(Resp::Progress("Asking the pad to enter config mode".into()));
         let hello = c.connect()?;
+        if let Err(e) = Self::same_pad(&hello, serial.as_deref()) {
+            if hello.mode == "config" {
+                let _ = c.exit();
+            }
+            return Err(e);
+        }
         if hello.mode != "config" && hello.mode != "recovery" {
             bail!("the pad answered in {} mode", hello.mode);
         }
@@ -275,6 +281,20 @@ impl<P: Ports> State<P> {
             tools,
             record,
         })
+    }
+
+    /// The pad that answered must be the one asked for: a port name can
+    /// change hands between finding it and opening it.
+    fn same_pad(h: &Hello, serial: Option<&str>) -> Result<()> {
+        if let Some(sn) = serial
+            && h.sn.as_deref() != Some(sn)
+        {
+            bail!(
+                "a different pad ({}) answered instead of {sn}",
+                h.sn.as_deref().unwrap_or("unknown")
+            );
+        }
+        Ok(())
     }
 
     fn client(&mut self) -> Result<&mut Client<Port>> {
@@ -332,6 +352,16 @@ impl<P: Ports> State<P> {
         // edits made on the pad since then (saved by the pad itself) would
         // otherwise be overwritten silently. A restart (the pad's leave
         // fallback, a crash) is fine only on top of that.
+        if let Err(e) = Self::same_pad(&h, self.serial.as_deref()) {
+            if h.mode == "config" {
+                let _ = self.client()?.exit();
+            }
+            self.client = None;
+            self.in_config = false;
+            self.path.clear();
+            self.emit(Resp::Disconnected);
+            return Err(e);
+        }
         let known = h.crc.is_some() && (h.crc == self.expected_crc || h.crc == self.attempted_crc);
         // A stored record this session didn't read or send: edited on the pad.
         // Any crc this session doesn't know: a fresh pad whose entry save
@@ -367,8 +397,10 @@ impl<P: Ports> State<P> {
             if let Some(rec) = self.attempted_rec.take() {
                 self.emit(Resp::Landed(rec));
             }
-        } else if h.crc.is_some() && h.crc == self.expected_crc {
-            self.attempted_crc = None; // conclusively not landed
+        } else if h.crc == self.expected_crc || (h.crc.is_none() && h.cfg != "ok") {
+            // Conclusively not landed: the record read at Connect, or still
+            // no stored record at all.
+            self.attempted_crc = None;
             self.attempted_rec = None;
         }
         self.boot = h.boot;
@@ -404,11 +436,17 @@ impl<P: Ports> State<P> {
         match self.client()?.commit() {
             Ok(_) => {}
             // A refusal is definitive: the record didn't land.
-            Err(e) if e.is::<DeviceError>() => {
+            // A refusal is definitive, except E_VERIFY: the write happened
+            // and only its read-back differed, so the record may be there.
+            Err(e)
+                if e.downcast_ref::<DeviceError>()
+                    .is_some_and(|d| d.code != 106) =>
+            {
                 self.attempted_crc = None;
                 self.attempted_rec = None;
                 return Err(e);
             }
+            Err(e) if e.is::<DeviceError>() => return Err(e),
             Err(e) => log::warn!("COMMIT: {e:#}"),
         }
         // Close the handle: Windows keeps stale ones across re-enumeration.
@@ -432,6 +470,13 @@ impl<P: Ports> State<P> {
             c.timeout = Duration::from_millis(500);
             match c.t.knock().and_then(|()| c.hello_retried()) {
                 Ok(h) => {
+                    if Self::same_pad(&h, Some(&serial)).is_err() {
+                        if h.mode == "config" {
+                            let _ = c.exit();
+                        }
+                        last_err = "a different pad answered on that port".into();
+                        continue;
+                    }
                     if h.boot == self.boot {
                         // Answered in config mode: let it go back to work;
                         // the next pass knocks again.
@@ -810,5 +855,48 @@ mod tests {
             panic!("trusted a refused commit")
         };
         assert!(m.contains("changed since Connect"), "{m}");
+    }
+
+    #[test]
+    fn a_different_pad_answering_is_refused() {
+        let rec = builtin("pad").expect("pad").encode().expect("encode");
+        let pad = FakePad::new(rec);
+        // The port found for this serial number is now answered by another
+        // pad (swapped between the lookup and the open).
+        pad.lock().sn = "PAD-B".into();
+        let w = Worker::spawn(FakePorts(pad.clone()), || {});
+        w.send(Req::Connect {
+            path: FAKE_PATH.into(),
+            serial: Some(FAKE_SERIAL.into()),
+        });
+        let Resp::Failed(m) = next(&w) else {
+            panic!("connected to the wrong pad")
+        };
+        assert!(m.contains("a different pad"), "{m}");
+        assert_eq!(pad.lock().mode, Mode::Normal, "and it was let go");
+    }
+
+    #[test]
+    fn an_unverified_commit_may_still_have_landed() {
+        let (pad, w, s) = setup();
+        let new = edited(&s.record);
+        {
+            let mut p = pad.lock();
+            p.fail_commit_code = Some(106); // E_VERIFY: written, read-back differed
+        }
+        w.send(Req::Save(new.clone()));
+        assert!(matches!(next(&w), Resp::Refused(_)));
+        {
+            let mut p = pad.lock(); // it did land, and the pad restarted
+            p.fail_commit_code = None;
+            p.stored = new.clone();
+            p.restart();
+        }
+        w.send(Req::Check(new.clone()));
+        let Resp::Landed(rec) = next(&w) else {
+            panic!("not recognised as landed")
+        };
+        assert_eq!(rec, new);
+        assert!(matches!(next(&w), Resp::Checked));
     }
 }

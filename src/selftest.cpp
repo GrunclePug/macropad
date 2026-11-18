@@ -229,6 +229,7 @@ void selftest_ack_report() {
 }
 
 void selftest_restart() {
+  text_clear();  // no tail of an earlier report reaches the next entry
   // A new run retires an unacknowledged report: it must never pass for this
   // run's result.
   if (report_from_nvs) {

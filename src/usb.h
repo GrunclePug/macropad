@@ -5,6 +5,8 @@
 
 namespace mp {
 
+const char* usb_serial();  // the USB serial number the host sees
+
 void usb_begin();
 bool usb_up();               // mounted and not suspended
 bool usb_take_disturbed();   // a loss or re-enumeration since the last call

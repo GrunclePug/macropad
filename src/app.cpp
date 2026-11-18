@@ -304,6 +304,7 @@ void app_setup() {
   core.set_unsaved(!boot.persist);
 
   env.fw = MACROPAD_VERSION;
+  env.sn = usb_serial();
   env.nonce = nonce;
   env.cfg_status = cfg_status;
   env.has_crc = valid;

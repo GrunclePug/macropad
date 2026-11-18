@@ -38,6 +38,10 @@ pub struct Pad {
     pub report_crc: Option<u32>,
     /// Refuse COMMIT (a failed flash write).
     pub fail_commit: bool,
+    /// Refuse COMMIT with this code instead (106: E_VERIFY).
+    pub fail_commit_code: Option<u8>,
+    /// The USB serial number HELLO reports.
+    pub sn: String,
     /// Answer PINS with an error (a Connect that fails after HELLO).
     pub fail_pins: bool,
     pub commits: u32,
@@ -60,6 +64,8 @@ impl FakePad {
             no_reboot: false,
             fail_pins: false,
             fail_commit: false,
+            fail_commit_code: None,
+            sn: FAKE_SERIAL.into(),
             report_crc: None,
             commits: 0,
             out: VecDeque::new(),
@@ -116,8 +122,8 @@ impl Pad {
             crc = format!("{c:08x}");
         }
         self.reply(format!(
-            "OK\tmacropad\t0.3.0\tproto 1\tmode {mode}\tcfg {cfg}\tcrc {crc}\tboot {:08x}",
-            self.boot
+            "OK\tmacropad\t0.3.0\tproto 1\tmode {mode}\tcfg {cfg}\tcrc {crc}\tboot {:08x}\tsn {}",
+            self.boot, self.sn
         ));
     }
 
@@ -170,6 +176,12 @@ impl Pad {
                 }
                 if self.fail_commit {
                     return self.err(105, 0, "E_WRITE: flash write failed");
+                }
+                if let Some(code) = self.fail_commit_code {
+                    if code == 106 {
+                        self.stored = self.staging.clone(); // written, read-back differed
+                    }
+                    return self.err(code, 0, "E_VERIFY: read-back differs");
                 }
                 self.stored = self.staging.clone();
                 self.recovery = false;

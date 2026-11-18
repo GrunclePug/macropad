@@ -1034,6 +1034,7 @@ mod tests {
                 cfg: "ok".into(),
                 crc: None,
                 boot: 1,
+                sn: None,
             },
             pins: PIN_NAMES
                 .iter()
@@ -1086,6 +1087,7 @@ mod tests {
                 cfg: "ok".into(),
                 crc: None,
                 boot: 1,
+                sn: None,
             },
             pins: PIN_NAMES
                 .iter()

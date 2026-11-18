@@ -104,6 +104,8 @@ bool usb_take_disturbed() { return __atomic_exchange_n(&disturbed, false, __ATOM
 
 UsbPort& usb_port() { return port; }
 
+const char* usb_serial() { return USB.serialNumber(); }
+
 bool usb_in_idle() { return USB0.dtknqr4_fifoemptymsk == 0; }
 
 uint32_t usb_last_hid_us() { return last_hid_us; }

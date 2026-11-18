@@ -123,8 +123,9 @@ void Proto::handle(char* line, Link& link) {
     char r[Link::MAX_LINE];
     char crc[9] = "none";
     if (env_.has_crc) snprintf(crc, sizeof crc, "%08lx", (unsigned long)env_.stored_crc);
-    snprintf(r, sizeof r, "OK\tmacropad\t%s\tproto 1\tmode %s\tcfg %s\tcrc %s\tboot %08lx", env_.fw,
-             env_.recovery ? "recovery" : "config", env_.cfg_status, crc, (unsigned long)env_.nonce);
+    int k = snprintf(r, sizeof r, "OK\tmacropad\t%s\tproto 1\tmode %s\tcfg %s\tcrc %s\tboot %08lx", env_.fw,
+                     env_.recovery ? "recovery" : "config", env_.cfg_status, crc, (unsigned long)env_.nonce);
+    if (env_.sn && k > 0 && (size_t)k < sizeof r) snprintf(r + k, sizeof r - k, "\tsn %s", env_.sn);
     link.reply(r);
     return;
   }
@@ -191,6 +192,9 @@ void Proto::handle(char* line, Link& link) {
     return;
   }
   if (env_.selftest && !strncmp(cmd, "TEST", 4)) {
+    // These need normal mode afterwards: not in recovery.
+    if (env_.recovery && (!strcmp(cmd, "TESTRUN") || !strcmp(cmd, "TESTTAP") || !strcmp(cmd, "TESTACK")))
+      return err(link, E_MODE, 0, "not in recovery");
     valid();
     link.reply("OK");
     if (!strcmp(cmd, "TESTCORRUPT")) env_.test("corrupt");
