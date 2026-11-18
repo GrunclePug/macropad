@@ -16,4 +16,28 @@ BootDecision boot_decide(const BootInput& in) {
   }
 }
 
+FlashView after_failed_write(Flash back, bool verified, bool flush) {
+  CrcFrom kept = flush ? CrcFrom::Staged : CrcFrom::Stored;
+  switch (back) {
+    case Flash::Exact:
+      return {true, CrcFrom::Stored, false};
+    case Flash::Unreadable:
+      return {false, CrcFrom::None, true};
+    case Flash::None:  // a verified record gone is a fault; else nothing landed
+      if (verified) return {false, CrcFrom::None, true};
+      return {false, flush ? CrcFrom::Staged : CrcFrom::None, false};
+    case Flash::Valid:  // the old record: a flush keeps reporting its edits
+    default:
+      return {false, kept, false};
+  }
+}
+
+FlashView at_entry(Flash read, bool verified) {
+  if (read == Flash::Valid || read == Flash::Exact) return {false, CrcFrom::Stored, false};
+  // Unreadable or gone: a fault if flash held a verified record; otherwise
+  // (nothing ever stored, or a safe or crash boot on an invalid record) no
+  // crc, and the boot row stands.
+  return {false, CrcFrom::None, verified};
+}
+
 }  // namespace mp

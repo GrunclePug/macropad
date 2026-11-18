@@ -166,18 +166,23 @@ fn connect(port: Option<&str>) -> Result<(Worker, worker::Session)> {
 
 fn pull(file: &std::path::Path, port: Option<&str>) -> Result<()> {
     let (_w, s) = connect(port)?;
-    // No crc: GET serves a fallback (the default or the running setup), not
-    // a stored record. Don't let it replace a good backup.
+    write_pulled(&s, file)?;
+    eprintln!("wrote {}", file.display());
+    Ok(())
+}
+
+/// Writes a Connect's setup to `file`, or refuses without touching it.
+fn write_pulled(s: &worker::Session, file: &std::path::Path) -> Result<()> {
+    // No crc: GET serves a fallback (the default or the running setup) the
+    // pad can't vouch for. Don't let it replace a good backup.
     if s.hello.crc.is_none() {
         bail!(
-            "the pad has no stored setup it can read back (cfg {}); nothing written",
+            "the pad has no setup it can vouch for (cfg {}); nothing written",
             s.hello.cfg
         );
     }
     let c = Config::decode(&s.record).context("the pad's setup")?;
-    preset::write_file(file, &Preset::from_config(&c).to_toml()?)?;
-    eprintln!("wrote {}", file.display());
-    Ok(())
+    preset::write_file(file, &Preset::from_config(&c).to_toml()?)
 }
 
 fn push(file: &std::path::Path, port: Option<&str>) -> Result<()> {
@@ -194,5 +199,46 @@ fn push(file: &std::path::Path, port: Option<&str>) -> Result<()> {
             Ok(())
         }
         r => bail!("unexpected answer {r:?}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_refused_pull_leaves_the_backup_alone() {
+        let dir = std::env::temp_dir().join(format!("macropad-pull-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let file = dir.join("backup.toml");
+        std::fs::write(&file, "the old backup").expect("write");
+        let mut s = worker::Session {
+            hello: protocol::Hello {
+                fw: "0.3.0".into(),
+                mode: "config".into(),
+                cfg: "ok".into(),
+                crc: None,
+                boot: 1,
+                sn: None,
+            },
+            pins: Vec::new(),
+            tools: Vec::new(),
+            record: preset::builtin("pad")
+                .expect("pad")
+                .encode()
+                .expect("encode"),
+        };
+        assert!(write_pulled(&s, &file).is_err());
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("read"),
+            "the old backup"
+        );
+        s.hello.crc = Some(1);
+        write_pulled(&s, &file).expect("a pad with a crc is pulled");
+        assert_ne!(
+            std::fs::read_to_string(&file).expect("read"),
+            "the old backup"
+        );
+        std::fs::remove_dir_all(&dir).expect("clean up");
     }
 }

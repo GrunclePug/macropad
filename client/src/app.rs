@@ -203,11 +203,19 @@ impl App {
                 self.cfg = cfg;
                 if unverified {
                     // Save is refused until a restart: say that, not "Save".
-                    self.notice = Some(
+                    // A notice about another pad's discarded edits stays.
+                    let earlier = if kept { None } else { self.notice.take() };
+                    let fault = if kept {
                         "The pad can't read its stored setup back (a flash fault). Unplug it, \
                          plug it back in and connect again; the editor keeps your setup."
-                            .into(),
-                    );
+                    } else {
+                        "The pad can't read its stored setup back (a flash fault). Unplug it, \
+                         plug it back in and connect again."
+                    };
+                    self.notice = Some(match earlier {
+                        Some(e) => format!("{e} {fault}"),
+                        None => fault.into(),
+                    });
                 }
                 self.snapshot = Some(c);
                 self.snapshot_serial = self.connecting_serial.take();
@@ -1248,6 +1256,23 @@ mod tests {
         assert!(n.contains("Unplug") && !n.contains("Save"), "{n}");
         assert!(a.status.contains("replug"), "{}", a.status);
         session.hello.cfg = "default crash".into();
+
+        // Another pad, unreadable, while the editor holds edits for this one:
+        // both notices, and nothing claims the editor kept a setup.
+        session.hello.mode = "config".into();
+        session.hello.cfg = "ok".into();
+        a.snapshot = Some(pad.clone());
+        a.cfg = pad.clone();
+        a.cfg.release_ms = 9;
+        a.connecting_serial = Some("B".into());
+        a.on_connect(session.clone());
+        assert_eq!(a.cfg, default, "another pad shows its own");
+        let n = a.notice.clone().expect("notice");
+        assert!(n.contains("discarded") && n.contains("Unplug"), "{n}");
+        assert!(!n.contains("keeps your setup"), "{n}");
+        session.hello.mode = "recovery".into();
+        session.hello.cfg = "default crash".into();
+        a.snapshot_serial = Some("A".into());
 
         // Another pad in recovery shows its own setup.
         a.connecting_serial = Some("B".into());

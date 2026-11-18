@@ -64,9 +64,9 @@ void stage_default() {
   config_encode(d, env.staging);
 }
 
-// HELLO's crc from what flash holds now, read back (after an E_WRITE or
-// E_VERIFY the write may have happened, so RAM can't be trusted).
-// `rec`/`n`: the record just read back from flash.
+// Flash held a verified record at the last look (boot, a save, a read).
+bool verified = false;
+
 // Flash no longer holds what it should (unreadable, or a verified record
 // gone): `cfg ok` with `crc none` (whatever the boot row), which the client
 // refuses to write over, and no pad-side saves until a restart sorts it out.
@@ -78,11 +78,37 @@ void flash_fault() {
   core.set_unsaved(true);
 }
 
-void crc_from_flash(const uint8_t* rec, size_t n) {
-  env.has_crc = n == CFG_SIZE && !config_validate(rec, n).code;
-  env.stored_crc = env.has_crc ? config_crc(rec) : 0;
-  if (env.has_crc && !strcmp(cfg_status, "none")) strcpy(cfg_status, "ok");
-  if (n && !env.has_crc) flash_fault();  // something stored, unreadable
+// One read of the stored record (`rec`, `n` from store_read). `want`: the
+// record just written, if any.
+Flash classify(const uint8_t* rec, size_t n, const uint8_t* want) {
+  if (!n) return Flash::None;
+  if (n != CFG_SIZE || config_validate(rec, n).code) return Flash::Unreadable;
+  return want && !memcmp(rec, want, CFG_SIZE) ? Flash::Exact : Flash::Valid;
+}
+
+// HELLO's crc from a decision. `stored`: the record read from flash;
+// `staged`: the staged record.
+void apply(const FlashView& v, const uint8_t* stored, const uint8_t* staged) {
+  if (v.fault) {
+    flash_fault();
+    return;
+  }
+  switch (v.crc) {
+    case CrcFrom::None:  // the boot row stands
+      env.has_crc = false;
+      env.stored_crc = 0;
+      break;
+    case CrcFrom::Stored:
+      verified = true;
+      env.has_crc = true;
+      env.stored_crc = config_crc(stored);
+      if (!strcmp(cfg_status, "none")) strcpy(cfg_status, "ok");
+      break;
+    case CrcFrom::Staged:
+      env.has_crc = true;
+      env.stored_crc = config_crc(staged);
+      break;
+  }
 }
 
 uint8_t do_commit(const uint8_t* rec) {
@@ -94,11 +120,11 @@ uint8_t do_commit(const uint8_t* rec) {
     // after the new blob was already written.
     static uint8_t again[CFG_SIZE];
     size_t n = store_read(again);
-    if (n == CFG_SIZE && !memcmp(again, rec, CFG_SIZE)) {
+    FlashView v = after_failed_write(classify(again, n, rec), verified, false);
+    if (v.landed)
       r = E_OK;
-    } else if (!core.recovery()) {
-      crc_from_flash(again, n);  // the same read decides (recovery keeps "none")
-    }
+    else if (!core.recovery())
+      apply(v, again, nullptr);  // the same read decides (recovery keeps "none")
   }
   if (r == E_OK) {
     core.freeze();  // terminal: no dispatch, no pad input until the restart
@@ -156,6 +182,7 @@ void do_test(const char* what) {
 // HELLO reports the stored record's crc: keep it current after pad-side saves.
 // From the record store_write() just verified, not a second read.
 void note_stored() {
+  verified = true;
   env.has_crc = true;
   env.stored_crc = store_saved_crc();
   // A fresh pad's first save creates the record (pad-side saves only run on
@@ -176,52 +203,32 @@ void enter_config(bool recovery, bool by_knock = false) {
 #endif
   // Pad-side edits not yet saved go to flash first, so Connect shows them and
   // a Save can't overwrite them. If that write fails, staging is the running
-  // config (with the edits) instead of the stored record.
-  bool flushed = true;
+  // config (with the edits), and the read-back decides what HELLO reports.
   if (!recovery && boot.persist && core.dirty()) {
     config_encode(cfg, env.staging);
-    flushed = store_write(env.staging) == E_OK;
-    if (flushed) {
+    if (store_write(env.staging) == E_OK) {
       core.clean();
       note_stored();
     } else {
-      // Read back, as after a failed commit: the write may have landed.
       static uint8_t back[CFG_SIZE];
       size_t m = store_read(back);
-      if (m == CFG_SIZE && !memcmp(back, env.staging, CFG_SIZE)) {
-        flushed = true;
-        core.clean();
-        env.has_crc = true;
-        env.stored_crc = config_crc(back);
-        if (!strcmp(cfg_status, "none")) strcpy(cfg_status, "ok");
-      } else if (m && (m != CFG_SIZE || config_validate(back, m).code)) {
-        flash_fault();  // staging stays the running config
-      } else {
-        // The old record or none: HELLO reports the staged record's crc, so
-        // a client that read the old stored record is refused rather than
-        // overwriting the edits.
-        env.has_crc = true;
-        env.stored_crc = config_crc(env.staging);
-      }
+      FlashView v = after_failed_write(classify(back, m, env.staging), verified, true);
+      apply(v, back, env.staging);
+      if (!v.landed) return;  // staging stays the running config
+      core.clean();
     }
   }
-  // Staging: the stored blob if it validates, otherwise the running config
-  // (recovery: the compiled default).
-  size_t n = recovery || !flushed ? 0 : store_read(env.staging);
-  if (recovery)
+  if (recovery) {
     stage_default();
-  else if (n != CFG_SIZE || config_validate(env.staging, n).code) {
-    // A record that validated before (at boot, or at a save) and now can't
-    // be read back, or is gone: the same flash fault as after a failed
-    // commit.
-    if (env.has_crc) flash_fault();
-    config_encode(cfg, env.staging);
-  } else {
-    // Staging is the stored record: HELLO reports exactly its crc, so what
-    // a client reads and the crc it's told always agree.
-    env.has_crc = true;
-    env.stored_crc = config_crc(env.staging);
+    return;
   }
+  // Staging: the stored blob if it validates, otherwise the running config.
+  // When it's the stored record, HELLO reports exactly its crc, so what a
+  // client reads and the crc it's told always agree.
+  size_t n = store_read(env.staging);
+  FlashView v = at_entry(classify(env.staging, n, nullptr), verified);
+  if (v.crc != CrcFrom::Stored) config_encode(cfg, env.staging);
+  apply(v, env.staging, nullptr);
 }
 
 void serve_config(uint32_t now) {
@@ -366,6 +373,7 @@ void app_setup() {
   env.nonce = nonce;
   env.cfg_status = cfg_status;
   env.has_crc = valid;
+  verified = valid;
   env.stored_crc = valid ? config_crc(blob) : 0;
   env.commit = do_commit;
   env.exit = do_exit;

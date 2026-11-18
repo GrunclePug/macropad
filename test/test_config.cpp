@@ -104,6 +104,51 @@ TEST(boot_rows_and_overlaps) {
   CHECK(!d.use_blob && !d.persist);
 }
 
+// Every row of the flash decisions (after a failed write, at config entry).
+TEST(flash_decisions) {
+  const Flash all[] = {Flash::None, Flash::Unreadable, Flash::Valid, Flash::Exact};
+  for (Flash f : all)
+    for (int verified = 0; verified < 2; verified++)
+      for (int flush = 0; flush < 2; flush++) {
+        FlashView v = after_failed_write(f, verified, flush);
+        CHECK(v.landed == (f == Flash::Exact));
+        CHECK(!(v.landed && v.fault));
+        if (v.fault) CHECK(v.crc == CrcFrom::None);
+        if (!flush) CHECK(v.crc != CrcFrom::Staged);
+      }
+  FlashView v;
+  // The entry flush failed, the old record intact: its edits' crc (9s).
+  v = after_failed_write(Flash::Valid, true, true);
+  CHECK(!v.landed && !v.fault && v.crc == CrcFrom::Staged);
+  // A fresh pad's entry flush failed, nothing stored: the same.
+  v = after_failed_write(Flash::None, false, true);
+  CHECK(!v.fault && v.crc == CrcFrom::Staged);
+  // A verified record gone, after a flush or a commit: a fault.
+  CHECK(after_failed_write(Flash::None, true, true).fault);
+  CHECK(after_failed_write(Flash::None, true, false).fault);
+  // Unreadable after any failed write: a fault.
+  CHECK(after_failed_write(Flash::Unreadable, false, false).fault);
+  CHECK(after_failed_write(Flash::Unreadable, false, true).fault);
+  // A commit that failed with the old record intact: its crc.
+  v = after_failed_write(Flash::Valid, true, false);
+  CHECK(!v.fault && v.crc == CrcFrom::Stored);
+  // A fresh pad's commit that failed, nothing stored: no crc, no fault.
+  v = after_failed_write(Flash::None, false, false);
+  CHECK(!v.fault && v.crc == CrcFrom::None);
+  // The write landed after all.
+  v = after_failed_write(Flash::Exact, false, true);
+  CHECK(v.landed && v.crc == CrcFrom::Stored);
+
+  // Config entry.
+  for (int verified = 0; verified < 2; verified++) {
+    CHECK(at_entry(Flash::Valid, verified).crc == CrcFrom::Stored);
+    CHECK(!at_entry(Flash::Valid, verified).fault);
+    CHECK(at_entry(Flash::None, verified).fault == bool(verified));
+    CHECK(at_entry(Flash::Unreadable, verified).fault == bool(verified));
+    CHECK(at_entry(Flash::None, verified).crc == CrcFrom::None);
+  }
+}
+
 TEST(knock_pattern) {
   Knock k;
   uint32_t t = 0;
@@ -266,6 +311,7 @@ void run_config_tests() {
   RUN(vectors_match_the_constants);
   RUN(invalid_records_give_their_code_and_offset);
   RUN(boot_rows_and_overlaps);
+  RUN(flash_decisions);
   RUN(knock_pattern);
   RUN(proto_hello_get_put_check_commit);
   RUN(proto_errors_and_pacing);
