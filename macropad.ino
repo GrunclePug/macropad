@@ -1,29 +1,6 @@
-// MacroPad.ino
+// macropad: USB HID macropad firmware. The code lives in src/.
+#include "src/app.h"
 
-// --- INCLUDE ---
-#include "MacroPadLogic.h"
+void setup() { mp::app_setup(); }
 
-// Scripts
-#include "scripts/Gamepad.cpp"
-#include "scripts/Autoclicker.cpp"
-#include "scripts/Jitter.cpp"
-#include "scripts/MouseHold.cpp"
-
-void setup() {
-  // Initialize the Serial monitor for debugging purposes
-  Serial.begin(115200);
-  Serial.println("MacroPad Starting...");
-
-  // Call the setup function from our custom logic file
-  macropadSetup();
-  Serial.println("MacroPad Online.");
-}
-
-void loop() {
-  updateButtonStates();
-  for (int i = 0; i < NUM_SCRIPTS; i++) {
-    if (scripts[i].enabled) {
-      scripts[i].run(&scripts[i]);
-    }
-  }
-}
+void loop() { mp::app_loop(); }
