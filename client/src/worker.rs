@@ -225,6 +225,16 @@ impl<P: Ports> State<P> {
     }
 
     fn connect(&mut self, path: &str, serial: Option<String>) -> Result<Session> {
+        // The pad picked is the one with this USB serial number, wherever it
+        // is now: another pad may have taken the listed port name.
+        let path = match &serial {
+            Some(sn) => self
+                .ports
+                .find(sn)
+                .ok_or_else(|| anyhow::anyhow!("the pad (USB serial {sn}) isn't plugged in"))?,
+            None => path.to_string(),
+        };
+        let path = path.as_str();
         self.emit(Resp::Progress(format!("Opening {path}")));
         let mut c = Client::new(self.ports.open(path)?);
         self.emit(Resp::Progress("Asking the pad to enter config mode".into()));
@@ -346,7 +356,11 @@ impl<P: Ports> State<P> {
             bail!("{why}; connect again to load it");
         }
         if h.crc.is_some() && h.crc == self.attempted_crc {
-            self.expected_crc = self.attempted_crc; // the last Save did land
+            // The last Save did land: tell the GUI, so its snapshot follows.
+            self.expected_crc = self.attempted_crc.take();
+            self.emit(Resp::Saved);
+        } else if h.crc.is_some() && h.crc == self.expected_crc {
+            self.attempted_crc = None; // conclusively not landed
         }
         self.boot = h.boot;
         self.recovery = h.mode == "recovery";
@@ -374,13 +388,16 @@ impl<P: Ports> State<P> {
         self.emit(Resp::Progress("Sending".into()));
         self.client()?.put_record(rec)?;
         self.client()?.check()?;
+        // Until the reboot check decides, the pad may hold this record.
         self.attempted_crc = Some(stored_crc(rec));
         self.emit(Resp::Progress("Saving".into()));
         match self.client()?.commit() {
             Ok(_) => {}
-            // A refusal is definitive; anything else is decided by the
-            // reboot check.
-            Err(e) if e.is::<DeviceError>() => return Err(e),
+            // A refusal is definitive: the record didn't land.
+            Err(e) if e.is::<DeviceError>() => {
+                self.attempted_crc = None;
+                return Err(e);
+            }
             Err(e) => log::warn!("COMMIT: {e:#}"),
         }
         // Close the handle: Windows keeps stale ones across re-enumeration.
@@ -699,6 +716,10 @@ mod tests {
         }
         w.send(Req::Check(new));
         assert!(
+            matches!(next(&w), Resp::Saved),
+            "the GUI learns the Save landed"
+        );
+        assert!(
             matches!(next(&w), Resp::Checked),
             "the attempted record counts as known"
         );
@@ -734,5 +755,48 @@ mod tests {
         };
         assert!(m.contains("changed since Connect"), "{m}");
         assert_eq!(pad.lock().commits, 0);
+    }
+
+    #[test]
+    fn connect_finds_the_picked_pad_by_serial_number() {
+        let rec = builtin("pad").expect("pad").encode().expect("encode");
+        let pad = FakePad::new(rec);
+        let w = Worker::spawn(FakePorts(pad.clone()), || {});
+        // The picker listed pad A on this port name; pad A is gone and the
+        // fake pad (another serial number) now answers there.
+        w.send(Req::Connect {
+            path: FAKE_PATH.into(),
+            serial: Some("PAD-A".into()),
+        });
+        let Resp::Failed(m) = next(&w) else {
+            panic!("connected to the wrong pad")
+        };
+        assert!(m.contains("isn't plugged in"), "{m}");
+        assert_eq!(
+            pad.lock().mode,
+            Mode::Normal,
+            "the other pad was never knocked"
+        );
+    }
+
+    #[test]
+    fn a_refused_commit_is_not_trusted_later() {
+        let (pad, w, s) = setup();
+        let new = edited(&s.record);
+        pad.lock().fail_commit = true;
+        w.send(Req::Save(new.clone()));
+        assert!(matches!(next(&w), Resp::Refused(_)));
+        {
+            // The pad later holds exactly those bytes by other means.
+            let mut p = pad.lock();
+            p.fail_commit = false;
+            p.stored = new.clone();
+        }
+        w.send(Req::Save(s.record));
+        assert!(matches!(next(&w), Resp::Disconnected));
+        let Resp::Failed(m) = next(&w) else {
+            panic!("trusted a refused commit")
+        };
+        assert!(m.contains("changed since Connect"), "{m}");
     }
 }

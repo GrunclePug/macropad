@@ -229,6 +229,16 @@ void selftest_ack_report() {
 }
 
 void selftest_restart() {
+  // A new run retires an unacknowledged report: it must never pass for this
+  // run's result.
+  if (report_from_nvs) {
+    Preferences p;
+    if (p.begin(REPORT_NS, false)) {
+      p.remove("report");
+      p.end();
+    }
+    report_from_nvs = false;
+  }
   pc = 0;
   wake = 0;
   nchecks = 0;
@@ -254,6 +264,12 @@ void selftest_step(uint32_t now) {
     check("script ran to the end (stopped: mode changed)", false);
     pc = REPORT;
     wake = now;
+  }
+  // Only a Nav button on a key screen: slot 1 may be a bound host shortcut.
+  if (tap_state == 1 && !core.config_mode() &&
+      (core.variant().buttons[1].role != Role::Nav || core.screen() != Core::Screen::Keys)) {
+    tap_state = 0;
+    text_printf("selftest: TESTTAP skipped (button 2 isn't Nav, or no key screen)");
   }
   if (!running && tap_state == 1 && !core.config_mode()) {
     pins_drive(app_runtime().button_pins[1], true);

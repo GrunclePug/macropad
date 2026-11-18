@@ -36,6 +36,8 @@ pub struct Pad {
     /// Report this crc in HELLO whatever is stored (a failed entry save:
     /// the staged edits' crc).
     pub report_crc: Option<u32>,
+    /// Refuse COMMIT (a failed flash write).
+    pub fail_commit: bool,
     /// Answer PINS with an error (a Connect that fails after HELLO).
     pub fail_pins: bool,
     pub commits: u32,
@@ -57,6 +59,7 @@ impl FakePad {
             away: 0,
             no_reboot: false,
             fail_pins: false,
+            fail_commit: false,
             report_crc: None,
             commits: 0,
             out: VecDeque::new(),
@@ -164,6 +167,9 @@ impl Pad {
                 }
                 if f[0] == "CHECK" {
                     return self.reply("OK");
+                }
+                if self.fail_commit {
+                    return self.err(105, 0, "E_WRITE: flash write failed");
                 }
                 self.stored = self.staging.clone();
                 self.recovery = false;

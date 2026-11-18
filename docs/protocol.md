@@ -185,7 +185,8 @@ Staging starts as the stored record (or the running setup if none validates; the
 Before every Check or Save, the client also confirms it's still talking to the same session:
 - any reported crc must be the one read at Connect, or the crc of the last Save (one whose reboot check timed out may still have landed); anything else was edited on the pad (a fresh pad whose save on entry failed reports its edits' crc while still `cfg none`), and the client refuses and asks to connect again;
 - a restart in between (a changed `boot`) is accepted with such a known record, or when there was no stored record then or now (`crc none`) and `cfg` is what it was at Connect (a fresh pad, or one in recovery);
-- the pad is reopened only by its USB serial number, never by port name.
+- the pad is opened and reopened only by its USB serial number, never by port name (a port without one can be read and checked, but Save refuses it);
+- a COMMIT refused with `ERR` didn't land; one whose outcome was unclear counts as landed only once a later `HELLO` shows its crc, and the app then marks it saved.
 
 After such a refusal, connecting again to the same pad (same USB serial number) keeps the editor's unsaved edits rebased onto the pad's new setup: each byte the editor changed keeps the editor's value, every other byte takes the pad's. Where both changed the same field, the app says which, and its value wins on Save. Edits never carry over to a different pad.
 
