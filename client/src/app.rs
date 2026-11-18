@@ -108,9 +108,17 @@ impl App {
             }
             Resp::Landed(rec) => {
                 // An earlier Save landed after all: that record is what the
-                // pad holds. The request in flight carries on.
+                // pad holds (so it's out of recovery). The request in flight
+                // carries on.
                 if let Ok(c) = Config::decode(&rec) {
+                    if self.saving.as_ref() == Some(&c) {
+                        self.saving = None;
+                    }
                     self.snapshot = Some(c);
+                }
+                if let Some(s) = self.session.as_mut() {
+                    s.hello.mode = "config".into();
+                    s.hello.cfg = "ok".into();
                 }
                 return;
             }
@@ -237,6 +245,11 @@ impl App {
     fn carry_over(&mut self, pad: &Config) -> Config {
         let same_pad =
             self.snapshot_serial.is_some() && self.snapshot_serial == self.connecting_serial;
+        // A Save whose outcome was unclear and which the pad now holds landed:
+        // it, not the older snapshot, is what the editor's edits stand on.
+        if same_pad && self.saving.as_ref() == Some(pad) {
+            self.snapshot = self.saving.take();
+        }
         let unsaved = self.snapshot.as_ref().is_some_and(|old| *old != self.cfg);
         let Some(old) = self.snapshot.clone().filter(|_| same_pad && unsaved) else {
             if unsaved {
@@ -668,9 +681,7 @@ impl App {
                 });
         }
         if let Some(i) = remove {
-            self.cfg.sets.remove(i);
-            let last = u8::try_from(self.cfg.sets.len().saturating_sub(1)).unwrap_or(0);
-            self.cfg.selected = self.cfg.selected.min(last);
+            remove_set(&mut self.cfg, i);
         }
         if self.cfg.sets.len() < SETS && ui.button("Add key set").clicked() {
             let n = (1..)
@@ -826,6 +837,18 @@ fn empty_config() -> Config {
         params: [[0; 8]; TOOL_SLOTS],
         selected: 0,
     }
+}
+
+/// Remove a key set, keeping the start-up set on the same set (by identity):
+/// a later set moves down a slot; removing the start-up set picks the first.
+fn remove_set(cfg: &mut Config, i: usize) {
+    cfg.sets.remove(i);
+    let sel = usize::from(cfg.selected);
+    cfg.selected = match sel.cmp(&i) {
+        std::cmp::Ordering::Less => cfg.selected,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => cfg.selected - 1,
+    };
 }
 
 fn role_label(r: u8) -> &'static str {
@@ -1124,5 +1147,83 @@ mod tests {
             Some(&a.cfg),
             "B still shows as unsaved"
         );
+    }
+
+    #[test]
+    fn removing_a_set_keeps_the_start_up_set() {
+        let mut c = builtin("pad").expect("pad"); // osu, stream, media
+        c.selected = 1; // stream
+        remove_set(&mut c, 0);
+        assert_eq!(c.sets[usize::from(c.selected)].id, "stream");
+        c.selected = 0; // stream, now first
+        remove_set(&mut c, 0); // remove the start-up set itself
+        assert_eq!(c.selected, 0);
+        assert_eq!(c.sets[0].id, "media");
+    }
+
+    #[test]
+    fn an_edit_made_during_a_save_that_landed_survives_a_reconnect() {
+        let mut a = app();
+        let mut five = a.cfg.clone();
+        five.release_ms = 5;
+        let mut ten = five.clone();
+        ten.release_ms = 10;
+        a.snapshot = Some(five.clone());
+        a.saving = Some(ten.clone()); // Save of 10 ms: landed, check timed out
+        a.cfg = five.clone(); // edited back to 5 ms meanwhile
+        a.snapshot_serial = Some("A".into());
+        a.connecting_serial = Some("A".into());
+        a.handle(Resp::Failed("couldn't confirm the save".into()));
+        let session = Session {
+            hello: crate::protocol::Hello {
+                fw: "0.3.0".into(),
+                mode: "config".into(),
+                cfg: "ok".into(),
+                crc: None,
+                boot: 2,
+                sn: None,
+            },
+            pins: PIN_NAMES
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (u8::try_from(i).expect("16 pins"), (*n).to_string()))
+                .collect(),
+            tools: builtin_tools(),
+            record: ten.encode().expect("encode"), // the pad holds 10 ms
+        };
+        a.on_connect(session);
+        assert_eq!(a.cfg.release_ms, 5, "the edit back to 5 ms survives");
+        assert_eq!(
+            a.snapshot.as_ref(),
+            Some(&ten),
+            "the pad's 10 ms is the base"
+        );
+    }
+
+    #[test]
+    fn a_landed_recovery_save_leaves_recovery_status() {
+        let mut a = app();
+        let mut session = Session {
+            hello: crate::protocol::Hello {
+                fw: "0.3.0".into(),
+                mode: "recovery".into(),
+                cfg: "invalid 4".into(),
+                crc: None,
+                boot: 1,
+                sn: None,
+            },
+            pins: PIN_NAMES
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (u8::try_from(i).expect("16 pins"), (*n).to_string()))
+                .collect(),
+            tools: builtin_tools(),
+            record: a.cfg.encode().expect("encode"),
+        };
+        session.hello.cfg = "invalid 4".into();
+        a.session = Some(session);
+        a.handle(Resp::Landed(a.cfg.encode().expect("encode")));
+        let h = &a.session.as_ref().expect("session").hello;
+        assert_eq!((h.mode.as_str(), h.cfg.as_str()), ("config", "ok"));
     }
 }
