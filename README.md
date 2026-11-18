@@ -143,7 +143,7 @@ Leave A2 (a boot strapping pin), D0 and D1 free. Keep the Nano's reset button re
 * mouse hold, key spam and saving settings
 * a USB disconnect and reconnect
 
-It only sends F13 to F17, mouse button 8 and small pointer moves. Normal mode has no serial output: a full run saves its report and restarts the pad, and the report comes out as `# ` lines the next time the pad enters config mode (by knocking, as the app does). Read until the `=== N checks, M failed ===` line before sending any command: a reply drops log lines that haven't gone out yet. `TESTRUN` runs it again. Flash the normal build afterwards.
+It only sends F13 to F17, mouse button 8 and small pointer moves. Normal mode has no serial output: a full run saves its report and restarts the pad, and the report comes out as `# ` lines the next time the pad enters config mode (by knocking, as the app does). The report is sent again at every config entry until a `TESTACK` command confirms it was read, and it's only valid on the boot right after its run. `TESTRUN` runs the self-test again. Flash the normal build afterwards.
 
 ## Development
 

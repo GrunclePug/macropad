@@ -106,17 +106,23 @@ void do_test(const char* what) {
     selftest_restart();
     begin_leave("Self-test");
   }
+  if (!strcmp(what, "tap")) selftest_request_nav_tap();  // after the next leave
+  if (!strcmp(what, "ack")) selftest_ack_report();
+  if (!strcmp(what, "erase")) {  // a fresh pad: no record, then restart
+    store_erase();
+    restart_armed = true;
+    restart_at = millis() + 200;
+  }
 #else
   (void)what;
 #endif
 }
 
 // HELLO reports the stored record's crc: keep it current after pad-side saves.
+// From the record store_write() just verified, not a second read.
 void note_stored() {
-  static uint8_t rec[CFG_SIZE];
-  size_t n = store_read(rec);
-  env.has_crc = n == CFG_SIZE && !config_validate(rec, n).code;
-  env.stored_crc = env.has_crc ? config_crc(rec) : 0;
+  env.has_crc = true;
+  env.stored_crc = store_saved_crc();
   // A fresh pad's first save creates the record (pad-side saves only run on
   // the "none" and "ok" boot rows).
   if (env.has_crc && !strcmp(cfg_status, "none")) strcpy(cfg_status, "ok");
@@ -130,6 +136,9 @@ void enter_config(bool recovery, bool by_knock = false) {
   proto.reset();
   knock.reset();
   env.recovery = recovery;
+#ifdef MACROPAD_SELFTEST
+  selftest_on_config_entry();  // re-sends an unacknowledged report
+#endif
   // Pad-side edits not yet saved go to flash first, so Connect shows them and
   // a Save can't overwrite them. If that write fails, staging is the running
   // config (with the edits) instead of the stored record.
@@ -140,6 +149,11 @@ void enter_config(bool recovery, bool by_knock = false) {
     if (flushed) {
       core.clean();
       note_stored();
+    } else {
+      // HELLO reports the staged record's crc, so a client that read the
+      // old stored record is refused rather than overwriting the edits.
+      env.has_crc = true;
+      env.stored_crc = config_crc(env.staging);
     }
   }
   // Staging: the stored blob if it validates, otherwise the running config

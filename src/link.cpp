@@ -91,7 +91,7 @@ void Link::reply(const char* line) {
     push(reply_, REPLY_CAP, reply_len_, line, "");
   }
   // Drop log lines that haven't started; keep the one being sent.
-  log_len_ = log_inflight_;
+  if (!keep_logs_) log_len_ = log_inflight_;
 }
 
 bool Link::log_room(uint16_t len) const {

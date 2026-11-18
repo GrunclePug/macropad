@@ -197,6 +197,9 @@ void Proto::handle(char* line, Link& link) {
     if (!strcmp(cmd, "TESTCRASH")) env_.test("crash");
     if (!strcmp(cmd, "TESTDETACH")) env_.test("detach");
     if (!strcmp(cmd, "TESTRUN")) env_.test("run");
+    if (!strcmp(cmd, "TESTTAP")) env_.test("tap");
+    if (!strcmp(cmd, "TESTACK")) env_.test("ack");
+    if (!strcmp(cmd, "TESTERASE")) env_.test("erase");
     return;
   }
   err(link, E_MODE, 0, "unknown command");

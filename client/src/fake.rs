@@ -21,7 +21,12 @@ pub enum Mode {
 #[derive(Debug)]
 pub struct Pad {
     pub mode: Mode,
+    /// Empty: a fresh pad (`cfg none`).
     pub stored: Vec<u8>,
+    /// The stored record is invalid: recovery mode, staging the default.
+    pub recovery: bool,
+    /// What a fresh or recovering pad stages: its compiled default.
+    pub default: Vec<u8>,
     pub staging: Vec<u8>,
     pub boot: u32,
     /// Finds that fail after a reboot (the pad is re-enumerating).
@@ -42,7 +47,9 @@ impl FakePad {
         FakePad(Arc::new(Mutex::new(Pad {
             mode: Mode::Normal,
             staging: rec.clone(),
+            default: rec.clone(),
             stored: rec,
+            recovery: false,
             boot: 0x1000,
             away: 0,
             no_reboot: false,
@@ -65,8 +72,17 @@ impl Pad {
     pub fn restart(&mut self) {
         self.mode = Mode::Normal;
         self.boot = self.boot.wrapping_mul(2_654_435_761).wrapping_add(7);
-        self.staging = self.stored.clone();
+        self.staging = if self.stored.is_empty() || self.recovery {
+            self.default.clone()
+        } else {
+            self.stored.clone()
+        };
         self.out.clear();
+    }
+
+    /// Config or recovery mode: the protocol is live.
+    fn live(&self) -> bool {
+        self.mode == Mode::Config || self.recovery
     }
 
     fn reply(&mut self, s: impl Into<String>) {
@@ -78,15 +94,25 @@ impl Pad {
     }
 
     fn hello(&mut self) {
-        let crc = stored_crc(&self.stored);
+        let (mode, cfg, crc) = if self.recovery {
+            ("recovery", "invalid 4".to_string(), "none".to_string())
+        } else if self.stored.is_empty() {
+            ("config", "none".to_string(), "none".to_string())
+        } else {
+            (
+                "config",
+                "ok".to_string(),
+                format!("{:08x}", stored_crc(&self.stored)),
+            )
+        };
         self.reply(format!(
-            "OK\tmacropad\t0.3.0\tproto 1\tmode config\tcfg ok\tcrc {crc:08x}\tboot {:08x}",
+            "OK\tmacropad\t0.3.0\tproto 1\tmode {mode}\tcfg {cfg}\tcrc {crc}\tboot {:08x}",
             self.boot
         ));
     }
 
     fn command(&mut self, line: &str) {
-        if self.mode != Mode::Config {
+        if !self.live() {
             return; // normal mode reads nothing
         }
         let f: Vec<&str> = line.split('\t').collect();
@@ -133,6 +159,7 @@ impl Pad {
                     return self.reply("OK");
                 }
                 self.stored = self.staging.clone();
+                self.recovery = false;
                 self.commits += 1;
                 let crc = stored_crc(&self.stored);
                 self.reply(format!("OK\t{crc:08x}"));
@@ -142,6 +169,7 @@ impl Pad {
                     self.away = 2;
                 }
             }
+            "EXIT" if self.recovery => self.err(101, 0, "E_MODE: not in recovery"),
             "EXIT" => {
                 self.reply("OK");
                 self.mode = Mode::Normal;

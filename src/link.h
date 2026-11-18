@@ -66,6 +66,9 @@ class Link {
   void service();
 
   bool reply_pending() const { return reply_len_ > 0; }
+  // Self-test builds: replies keep queued log lines (the report must not be
+  // cut short by a command sent while it drains).
+  void keep_logs(bool on) { keep_logs_ = on; }
   // Anything left to send (a reply, or a log line).
   bool output_pending() const { return reply_len_ > 0 || log_len_ > 0; }
   // Drop log lines that haven't started (leaving config mode: a reply such
@@ -98,6 +101,7 @@ class Link {
 
   uint32_t stalls_ = 0;
   bool counting_ = false;
+  bool keep_logs_ = false;
 };
 
 }  // namespace mp

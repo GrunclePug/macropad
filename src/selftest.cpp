@@ -138,6 +138,8 @@ void rep(const char* fmt, ...) {
   saved_len += len + 1;
 }
 
+int cleanup_state[7] = {-1, -1, -1, -1, -1, -1, -1};
+
 void report() {
   sort_latency();  // the abort path reaches here without the trials' sort
   rep("=== selftest results ===");
@@ -150,6 +152,8 @@ void report() {
     rep("latency_us n=%d min=%lu p50=%lu p99=%lu max=%lu", nlat, (unsigned long)lat[0],
                 (unsigned long)lat[nlat / 2], (unsigned long)p99(), (unsigned long)lat[nlat - 1]);
   rep("chords ok=%d split=%d", chord_ok, chord_split);
+  rep("cleanup screen=%d set=%d menu=%d cursor=%d buttons=%x keys=%d killed=%d", cleanup_state[0], cleanup_state[1],
+      cleanup_state[2], cleanup_state[3], cleanup_state[4], cleanup_state[5], cleanup_state[6]);
   rep("kb_reports=%lu mods_seen=%lu f17_reports=%lu", (unsigned long)kb_reports,
               (unsigned long)mods_seen, (unsigned long)f17_reports);
   rep("loop max_gap_us=%lu gaps_over_2ms=%lu loops=%lu", (unsigned long)stats.max_gap_us,
@@ -163,25 +167,52 @@ void report() {
 
 void selftest_begin() {
   hid.on_keys_sent = on_keys;
+  cdc_link().keep_logs(true);
   text_printf("selftest: boot, reset reason %d", (int)esp_reset_reason());
   // A report saved before the restart that ended the last run: hand it out
   // at the next knock instead of running again.
+  // It is valid only on the boot right after the run that saved it (marked
+  // "fresh"): any later boot, a re-flash included, drops it, so a stale
+  // report can never pass for a new run.
   Preferences p;
   if (!p.begin(REPORT_NS, false)) return;
+  bool fresh = p.getUChar("fresh", 0) == 1;
+  p.putUChar("fresh", 0);
   size_t n = p.getBytesLength("report");
-  if (n && n <= sizeof saved && p.getBytes("report", saved, n) == n) {
-    for (size_t at = 0; at < n;) {
-      size_t len = strnlen(saved + at, n - at);
-      text_printf("%.*s", (int)len, saved + at);
-      at += len + 1;
-    }
-    text_printf("selftest: done (knock to read)");
+  if (fresh && n && n <= sizeof saved && p.getBytes("report", saved, n) == n) {
+    saved_len = (uint16_t)n;
     pc = DONE;
-    report_from_nvs = true;
+    report_from_nvs = true;  // queued at each config entry until TESTACK
   } else if (n) {
-    p.remove("report");  // unreadable: don't keep tripping over it
+    p.remove("report");  // stale or unreadable
   }
   p.end();
+}
+
+static uint8_t tap_state = 0;
+static uint32_t tap_at = 0;
+
+void selftest_request_nav_tap() { tap_state = 1; }
+
+void selftest_on_config_entry() {
+  if (!report_from_nvs) return;
+  text_clear();
+  for (size_t at = 0; at < saved_len;) {
+    size_t len = strnlen(saved + at, saved_len - at);
+    text_printf("%.*s", (int)len, saved + at);
+    at += len + 1;
+  }
+  text_printf("selftest: done (send TESTACK once read)");
+}
+
+void selftest_ack_report() {
+  if (!report_from_nvs) return;
+  Preferences p;
+  if (p.begin(REPORT_NS, false)) {
+    p.remove("report");
+    p.end();
+  }
+  report_from_nvs = false;
 }
 
 void selftest_restart() {
@@ -210,6 +241,14 @@ void selftest_step(uint32_t now) {
     check("script ran to the end (stopped: mode changed)", false);
     pc = REPORT;
     wake = now;
+  }
+  if (!running && tap_state == 1 && !core.config_mode()) {
+    pins_drive(app_runtime().button_pins[1], true);
+    tap_at = now;
+    tap_state = 2;
+  } else if (tap_state == 2 && now - tap_at >= 80) {
+    pins_drive(app_runtime().button_pins[1], false);
+    tap_state = 0;
   }
   if (!due(now, wake)) return;
   switch (pc) {
@@ -296,12 +335,13 @@ void selftest_step(uint32_t now) {
       check("no CDC function ran in normal mode", cdc_call_count() == calls);
       check("every osu press reached a report", nlat == TRIALS);
       // Pin to report accepted. A report either makes the next USB frame or
-      // waits one more (the shared endpoint), so p99 over 200 trials lands
-      // near 0.6 or 1.1 ms run to run; check the median, the share that
-      // waited, and that nothing waited longer than one extra frame.
+      // waits one more (the shared endpoint), so p99 (the third-largest of
+      // 200) lands near 0.6 or 1.1 ms run to run. Check the median, the share
+      // that waited, p99, and that even the slowest waited one frame at most.
       check("latency median <= 0.75 ms", nlat && lat[nlat / 2] <= 750);
       check("latency: at most 2 % of presses over 1 ms", nlat && over_1ms() * 50 <= nlat);
       check("latency p99 <= 1.25 ms (one extra USB frame at most)", nlat && p99() <= 1250);
+      check("latency: slowest press <= 1.5 ms", nlat && lat[nlat - 1] <= 1500);
       check("no loop gap over 2 ms", stats.gaps_over_2ms == 0);
       check("every chord in one report", chord_ok == 20 && chord_split == 0);
       check("tools still running after the trials", core.active(0) && core.active(1));
@@ -441,6 +481,13 @@ void selftest_step(uint32_t now) {
       WAIT(1500);
       check("clean up: nothing held, osu shown", hid.sent_buttons() == 0 && hid.sent_keys().empty() &&
                                                     core.screen() == Core::Screen::Keys && core.set() == 0);
+      cleanup_state[0] = (int)core.screen();
+      cleanup_state[1] = core.set();
+      cleanup_state[2] = core.in_menu();
+      cleanup_state[3] = core.cursor();
+      cleanup_state[4] = hid.sent_buttons();
+      cleanup_state[5] = !hid.sent_keys().empty();
+      cleanup_state[6] = core.killed();
       check("no modifier ever sent", mods_seen == 0);
       running = false;
       pins_release_all();
@@ -453,6 +500,7 @@ void selftest_step(uint32_t now) {
         Preferences p;
         if (p.begin(REPORT_NS, false)) {
           p.putBytes("report", saved, saved_len);
+          p.putUChar("fresh", 1);
           p.end();
         }
       }
@@ -466,15 +514,6 @@ void selftest_step(uint32_t now) {
       pc = DONE;
       return;
     case DONE:
-      // The saved report has gone out over config-mode serial: forget it.
-      if (report_from_nvs && core.config_mode() && text_idle() && !cdc_link().output_pending()) {
-        Preferences p;
-        if (p.begin(REPORT_NS, false)) {
-          p.remove("report");
-          p.end();
-        }
-        report_from_nvs = false;
-      }
       return;
   }
 }

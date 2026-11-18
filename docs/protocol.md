@@ -144,7 +144,7 @@ One validator runs at boot, on `CHECK` and on `COMMIT`, and the first failure wi
 | Nothing stored | normal | the default | on | `none` |
 | Valid record | normal | the record | on | `ok` |
 
-The safe-boot pin is the stored layout's first key pin, plus D2 when there's no valid record or D2 is in use.
+The safe-boot pin is the stored layout's first key pin, plus D2 when there's no valid record or D2 is in use. A stored record longer than 1355 bytes (from a newer firmware, say) can't be read and shows as `invalid 1`.
 
 ## Serial
 
@@ -173,7 +173,7 @@ Lines are tab-separated, end in `\n` (a trailing `\r` is ignored) and are at mos
 
 Staging starts as the stored record (or the running setup if none validates; the default in recovery); edits made on the pad and not yet saved are saved first. `boot` is a random number picked at each boot, so a changed value proves a restart. `crc` is the stored record's, kept current when the pad saves its own edits, and `cfg` changes from `none` to `ok` when the first save creates the record.
 
-**Self-test builds only:** `TESTCORRUPT` stores a record with a bad CRC and restarts; `TESTCRASH` aborts; `TESTDETACH` drops off USB for 1.5 s; `TESTRUN` leaves config mode and runs the self-test again.
+**Self-test builds only:** `TESTCORRUPT` stores a record with a bad CRC and restarts; `TESTCRASH` aborts; `TESTDETACH` drops off USB for 1.5 s; `TESTRUN` leaves config mode and runs the self-test again; `TESTTAP` taps Nav once the pad is back in normal mode (an unsaved pad edit, for testing the save on entry); `TESTACK` confirms the self-test report was read (until then it's re-sent at every config entry); `TESTERASE` removes the stored record and restarts (a fresh pad).
 
 ### Saving, as the client does it
 
@@ -182,4 +182,9 @@ Staging starts as the stored record (or the running setup if none validates; the
 3. Close the port, then every 250 ms for up to 12 s look for the same USB serial number, open it, knock and `HELLO`.
 4. Success needs a changed `boot`, mode config, cfg `ok` and the crc of the record sent. Then `EXIT`.
 
-Before every Check or Save, the client also confirms the pad still holds the record it read or saved (by `crc`), so edits saved on the pad in the meantime are never overwritten; a restart in between is accepted only on that condition.
+Before every Check or Save, the client also confirms it's still talking to the same session:
+- a stored record (`cfg ok`) must have the crc read at Connect, or the crc of the last Save (one whose reboot check timed out may still have landed); anything else was edited on the pad, and the client refuses and asks to connect again;
+- a restart in between (a changed `boot`) is accepted with such a known record, or when there was no stored record then or now (`crc none`) and `cfg` is what it was at Connect (a fresh pad, or one in recovery);
+- the pad is reopened only by its USB serial number, never by port name.
+
+If saving the pad's own edits fails when config mode starts, `HELLO` reports the crc of the staged record (the edits), so a client that read the old record is refused rather than overwriting them.

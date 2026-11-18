@@ -32,5 +32,6 @@ bool cdc_tx_holds_hid(uint32_t now_us);
 void text_printf(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 void text_service();
 bool text_idle();
+void text_clear();  // drop buffered text (self-test report re-send)
 
 }  // namespace mp

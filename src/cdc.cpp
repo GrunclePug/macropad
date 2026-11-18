@@ -145,4 +145,6 @@ void text_service() {
 
 bool text_idle() { return text_len == 0; }
 
+void text_clear() { text_len = 0; }
+
 }  // namespace mp

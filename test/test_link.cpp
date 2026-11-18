@@ -160,6 +160,18 @@ TEST(link_leaving_keeps_the_reply) {
   CHECK(!l.output_pending());
 }
 
+// Self-test builds: a reply doesn't drop queued log lines (the report).
+TEST(link_keep_logs_survives_a_reply) {
+  FakeCdc c;
+  Link l(c);
+  l.watch();
+  l.keep_logs(true);
+  l.log("report line");
+  l.reply("OK");
+  std::string out = run(l, c, 8);
+  CHECK(out.find("OK\n") != std::string::npos && out.find("# report line\n") != std::string::npos);
+}
+
 void run_link_tests() {
   RUN(link_reads_lines_and_strips_cr);
   RUN(link_holds_next_line_while_reply_pending);
@@ -169,4 +181,5 @@ void run_link_tests() {
   RUN(link_session_break_purges);
   RUN(link_counts_stalls_only_when_asked);
   RUN(link_leaving_keeps_the_reply);
+  RUN(link_keep_logs_survives_a_reply);
 }

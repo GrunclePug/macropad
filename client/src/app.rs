@@ -39,6 +39,8 @@ pub struct App {
     tools: Vec<ToolInfo>,
     pub cfg: Config,
     snapshot: Option<Config>,
+    /// The setup a Save in flight sent.
+    saving: Option<Config>,
     busy: Option<String>,
     status: String,
     error: Option<String>,
@@ -64,6 +66,7 @@ impl App {
             tools: builtin_tools(),
             cfg: builtin("pad").unwrap_or_else(empty_config),
             snapshot: None,
+            saving: None,
             busy: None,
             status: "Plug in the pad, pick its port and press Connect.".into(),
             error: None,
@@ -84,40 +87,48 @@ impl App {
     /// Handle the worker's replies; true while a request is still running.
     pub fn poll(&mut self) -> bool {
         while let Ok(r) = self.worker.rx.try_recv() {
-            match r {
-                Resp::Progress(s) => {
-                    self.busy = Some(s);
-                    continue;
-                }
-                Resp::Connected(s) => self.on_connect(*s),
-                Resp::Checked => {
-                    self.error = None;
-                    self.status = "The pad accepts this setup.".into();
-                }
-                Resp::Saved => {
-                    self.error = None;
-                    self.snapshot = Some(self.cfg.clone());
-                    // The pad restarted with this record: out of recovery.
-                    if let Some(s) = self.session.as_mut() {
-                        s.hello.mode = "config".into();
-                        s.hello.cfg = "ok".into();
-                    }
-                    self.status = "Saved. The pad restarted with the new setup.".into();
-                }
-                Resp::Refused(e) => self.error = Some(format!("The pad refused this setup: {e}")),
-                Resp::Failed(m) => self.error = Some(m),
-                Resp::Left => {
-                    self.status = "The pad left config mode. Save will ask it back.".into();
-                }
-                Resp::Disconnected => {
-                    self.session = None;
-                    self.snapshot = None;
-                    self.status = "Disconnected.".into();
-                }
-            }
-            self.busy = None;
+            self.handle(r);
         }
         self.busy.is_some()
+    }
+
+    /// Apply one worker reply.
+    fn handle(&mut self, r: Resp) {
+        match r {
+            Resp::Progress(s) => {
+                self.busy = Some(s);
+                return;
+            }
+            Resp::Connected(s) => self.on_connect(*s),
+            Resp::Checked => {
+                self.error = None;
+                self.status = "The pad accepts this setup.".into();
+            }
+            Resp::Saved => {
+                self.error = None;
+                if let Some(sent) = self.saving.take() {
+                    self.snapshot = Some(sent);
+                }
+                // The pad restarted with this record: out of recovery.
+                if let Some(s) = self.session.as_mut() {
+                    s.hello.mode = "config".into();
+                    s.hello.cfg = "ok".into();
+                }
+                self.status = "Saved. The pad restarted with the new setup.".into();
+            }
+            Resp::Refused(e) => self.error = Some(format!("The pad refused this setup: {e}")),
+            Resp::Failed(m) => self.error = Some(m),
+            Resp::Left => {
+                self.status = "The pad left config mode. Save will ask it back.".into();
+            }
+            Resp::Disconnected => {
+                // The snapshot stays, so a reconnect can tell whether
+                // the editor holds unsaved edits.
+                self.session = None;
+                self.status = "Disconnected.".into();
+            }
+        }
+        self.busy = None;
     }
 
     fn on_connect(&mut self, s: Session) {
@@ -133,11 +144,26 @@ impl App {
         }
         match Config::decode(&s.record) {
             Ok(c) => {
-                self.cfg = c.clone();
+                // Edits not yet saved stay in the editor, on top of what the
+                // pad holds now (Revert takes the pad's setup).
+                let unsaved = self.snapshot.as_ref().is_some_and(|old| *old != self.cfg);
+                if unsaved {
+                    self.notice = Some(
+                        "Your unsaved edits are kept. Save to send them, or Revert to take the pad's setup.".into(),
+                    );
+                } else {
+                    self.cfg = c.clone();
+                }
                 self.snapshot = Some(c);
                 self.error = None;
             }
-            Err(e) => self.error = Some(format!("The pad sent a setup this app can't read: {e:#}")),
+            Err(e) => {
+                // No session: Save stays off rather than sending the editor's
+                // old contents to a pad whose setup couldn't be read.
+                self.error = Some(format!("The pad sent a setup this app can't read: {e:#}"));
+                self.worker.send(Req::Disconnect);
+                return;
+            }
         }
         self.tools = s.tools.clone();
         self.status = if s.hello.mode == "recovery" {
@@ -166,7 +192,6 @@ impl App {
         self.busy = Some("Connecting".into());
         // Writes stay off until this Connect succeeds.
         self.session = None;
-        self.snapshot = None;
         self.worker.send(Req::Connect {
             path: p.path.clone(),
             serial: p.serial.clone(),
@@ -253,6 +278,9 @@ impl App {
             {
                 self.error = None;
                 self.busy = Some("Saving".into());
+                // What the pad will hold if this Save succeeds; the editor
+                // may change while it runs.
+                self.saving = Some(self.cfg.clone());
                 self.worker.send(Req::Save(rec));
             }
             if ui
@@ -927,5 +955,78 @@ mod tests {
         assert!(toggles(&a.cfg, 2) > 0, "other tools keep theirs");
         let n = a.notice.expect("a notice");
         assert!(n.contains("key 8") && n.contains("push"), "{n}");
+    }
+
+    #[test]
+    fn reconnecting_keeps_unsaved_edits() {
+        let mut a = app();
+        let pad = builtin("pad").expect("pad");
+        a.snapshot = Some(pad.clone());
+        a.cfg.release_ms = 9; // an unsaved edit
+        let mut other = pad.clone();
+        other.selected = 1; // the pad's own setup changed meanwhile
+        let session = Session {
+            hello: crate::protocol::Hello {
+                fw: "0.3.0".into(),
+                mode: "config".into(),
+                cfg: "ok".into(),
+                crc: None,
+                boot: 1,
+            },
+            pins: PIN_NAMES
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (u8::try_from(i).expect("16 pins"), (*n).to_string()))
+                .collect(),
+            tools: builtin_tools(),
+            record: other.encode().expect("encode"),
+        };
+        a.on_connect(session);
+        assert_eq!(a.cfg.release_ms, 9, "the edit survives");
+        assert_eq!(
+            a.snapshot.as_ref().expect("snapshot").selected,
+            1,
+            "the snapshot is the pad's"
+        );
+        assert!(a.notice.is_some());
+    }
+
+    #[test]
+    fn a_save_snapshots_what_it_sent() {
+        let mut a = app();
+        let sent = a.cfg.clone();
+        a.saving = Some(sent.clone());
+        a.cfg.release_ms = 21; // edited while the Save ran
+        a.handle(Resp::Saved);
+        assert_eq!(a.snapshot.as_ref(), Some(&sent));
+        assert_ne!(
+            a.snapshot.as_ref(),
+            Some(&a.cfg),
+            "the later edit still shows as unsaved"
+        );
+    }
+
+    #[test]
+    fn an_unreadable_setup_opens_no_session() {
+        let mut a = app();
+        let session = Session {
+            hello: crate::protocol::Hello {
+                fw: "0.3.0".into(),
+                mode: "config".into(),
+                cfg: "ok".into(),
+                crc: None,
+                boot: 1,
+            },
+            pins: PIN_NAMES
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (u8::try_from(i).expect("16 pins"), (*n).to_string()))
+                .collect(),
+            tools: builtin_tools(),
+            record: vec![0; 1355],
+        };
+        a.handle(Resp::Connected(Box::new(session)));
+        assert!(!a.connected(), "Save stays off");
+        assert!(a.error.is_some());
     }
 }

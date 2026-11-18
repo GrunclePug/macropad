@@ -92,6 +92,8 @@ impl Worker {
                 recovery: false,
                 boot: 0,
                 expected_crc: None,
+                attempted_crc: None,
+                connect_cfg: String::new(),
                 out: resp_tx,
                 wake: Box::new(wake),
             }
@@ -134,6 +136,12 @@ struct State<P: Ports> {
     /// pad that restarted on its own still counts as this session if it
     /// holds exactly this.
     expected_crc: Option<u32>,
+    /// The crc of the record the last Save sent: if its reboot check timed
+    /// out but the save landed, the pad holds this one.
+    attempted_crc: Option<u32>,
+    /// `cfg` at Connect: a pad with no stored record that restarted is the
+    /// same session only if this is unchanged.
+    connect_cfg: String,
     out: Sender<Resp>,
     wake: Box<dyn Fn() + Send>,
 }
@@ -242,6 +250,8 @@ impl<P: Ports> State<P> {
         self.recovery = hello.mode == "recovery";
         self.boot = hello.boot;
         self.expected_crc = hello.crc;
+        self.attempted_crc = None;
+        self.connect_cfg = hello.cfg.clone();
         self.in_config = true;
         self.client = Some(c);
         Ok(Session {
@@ -265,10 +275,13 @@ impl<P: Ports> State<P> {
             bail!("not connected");
         }
         self.client = None;
-        if let Some(sn) = self.serial.clone()
-            && let Some(p) = self.ports.find(&sn)
-        {
-            self.path = p;
+        // A pad is identified by its USB serial number only: another pad may
+        // have taken this port name.
+        if let Some(sn) = self.serial.clone() {
+            self.path = self
+                .ports
+                .find(&sn)
+                .ok_or_else(|| anyhow::anyhow!("the pad (USB serial {sn}) isn't plugged in"))?;
         }
         let port = self.ports.open(&self.path)?;
         self.client = Some(Client::new(port));
@@ -304,10 +317,22 @@ impl<P: Ports> State<P> {
         // edits made on the pad since then (saved by the pad itself) would
         // otherwise be overwritten silently. A restart (the pad's leave
         // fallback, a crash) is fine only on top of that.
-        let same_record = h.crc.is_some() && h.crc == self.expected_crc;
-        let changed = h.cfg == "ok" && !same_record;
+        let known = h.crc.is_some() && (h.crc == self.expected_crc || h.crc == self.attempted_crc);
+        // A stored record this session didn't read or send: edited on the pad.
+        let changed = h.cfg == "ok" && !known;
         let restarted = h.boot != self.boot;
-        if changed || (restarted && !(h.cfg == "ok" && same_record)) {
+        // Nothing stored then or now (a fresh pad, or one in recovery), and
+        // no change: a restart loses nothing.
+        let nothing_stored =
+            h.crc.is_none() && self.expected_crc.is_none() && h.cfg == self.connect_cfg;
+        let refuse = if changed {
+            Some("the pad's saved setup changed since Connect (edited on the pad?)")
+        } else if restarted && !(h.cfg == "ok" && known) && !nothing_stored {
+            Some("the pad restarted and is no longer running the setup read at Connect")
+        } else {
+            None
+        };
+        if let Some(why) = refuse {
             // Not this session's pad any more: let it go back to work.
             if h.mode == "config" {
                 let _ = self.client()?.exit();
@@ -315,9 +340,11 @@ impl<P: Ports> State<P> {
             self.client = None;
             self.in_config = false;
             self.path.clear();
-            bail!(
-                "the pad's saved setup changed since Connect (edited on the pad?); connect again to load it"
-            );
+            self.emit(Resp::Disconnected);
+            bail!("{why}; connect again to load it");
+        }
+        if h.crc.is_some() && h.crc == self.attempted_crc {
+            self.expected_crc = self.attempted_crc; // the last Save did land
         }
         self.boot = h.boot;
         self.recovery = h.mode == "recovery";
@@ -345,6 +372,7 @@ impl<P: Ports> State<P> {
         self.emit(Resp::Progress("Sending".into()));
         self.client()?.put_record(rec)?;
         self.client()?.check()?;
+        self.attempted_crc = Some(stored_crc(rec));
         self.emit(Resp::Progress("Saving".into()));
         match self.client()?.commit() {
             Ok(_) => {}
@@ -375,10 +403,16 @@ impl<P: Ports> State<P> {
             match c.t.knock().and_then(|()| c.hello_retried()) {
                 Ok(h) => {
                     if h.boot == self.boot {
+                        // Answered in config mode: let it go back to work;
+                        // the next pass knocks again.
+                        let _ = c.exit();
                         last_err = "the pad didn't restart, so the setup wasn't saved".into();
                         continue;
                     }
                     if h.mode != "config" || h.cfg != "ok" || h.crc != Some(want) {
+                        if h.mode == "config" {
+                            let _ = c.exit();
+                        }
                         bail!(
                             "the pad restarted with a different setup (mode {}, cfg {}, crc {:08x?}); \
                              your edits are still here",
@@ -390,6 +424,7 @@ impl<P: Ports> State<P> {
                     self.path = path;
                     self.boot = h.boot;
                     self.expected_crc = Some(want);
+                    self.attempted_crc = None;
                     let _ = c.exit();
                     return Ok(());
                 }
@@ -550,6 +585,10 @@ mod tests {
             p.restart();
         }
         w.send(Req::Save(s.record.clone()));
+        assert!(
+            matches!(next(&w), Resp::Disconnected),
+            "the app is told first"
+        );
         let Resp::Failed(m) = next(&w) else {
             panic!("not refused")
         };
@@ -569,10 +608,113 @@ mod tests {
             p.stored = c.encode().expect("encode");
         }
         w.send(Req::Save(s.record.clone()));
+        assert!(
+            matches!(next(&w), Resp::Disconnected),
+            "the app is told first"
+        );
         let Resp::Failed(m) = next(&w) else {
             panic!("not refused")
         };
         assert!(m.contains("changed since Connect"), "{m}");
+        assert_eq!(pad.lock().commits, 0);
+    }
+
+    fn connect_to(pad: &FakePad) -> (Worker, Session) {
+        let w = Worker::spawn(FakePorts(pad.clone()), || {});
+        w.send(Req::Connect {
+            path: FAKE_PATH.into(),
+            serial: Some(FAKE_SERIAL.into()),
+        });
+        let Resp::Connected(s) = next(&w) else {
+            panic!("not connected")
+        };
+        (w, *s)
+    }
+
+    fn edited(rec: &[u8]) -> Vec<u8> {
+        let mut c = Config::decode(rec).expect("decode");
+        c.release_ms = 13;
+        c.encode().expect("encode")
+    }
+
+    #[test]
+    fn a_fresh_pad_saves_its_first_record() {
+        let rec = builtin("pad").expect("pad").encode().expect("encode");
+        let pad = FakePad::new(rec);
+        pad.lock().stored.clear();
+        let (w, s) = connect_to(&pad);
+        assert_eq!(s.hello.cfg, "none");
+        let new = edited(&s.record);
+        w.send(Req::Save(new.clone()));
+        assert!(matches!(next(&w), Resp::Saved));
+        assert_eq!(pad.lock().stored, new);
+    }
+
+    #[test]
+    fn a_fresh_pad_that_restarted_still_saves() {
+        let rec = builtin("pad").expect("pad").encode().expect("encode");
+        let pad = FakePad::new(rec);
+        pad.lock().stored.clear();
+        let (w, s) = connect_to(&pad);
+        pad.lock().restart();
+        let new = edited(&s.record);
+        w.send(Req::Save(new.clone()));
+        assert!(matches!(next(&w), Resp::Saved));
+        assert_eq!(pad.lock().stored, new);
+    }
+
+    #[test]
+    fn a_recovery_pad_is_repaired() {
+        let rec = builtin("pad").expect("pad").encode().expect("encode");
+        let pad = FakePad::new(rec);
+        {
+            let mut p = pad.lock();
+            p.recovery = true;
+            p.stored = vec![0; 1355]; // invalid
+        }
+        let (w, s) = connect_to(&pad);
+        assert_eq!(s.hello.mode, "recovery");
+        let new = edited(&s.record);
+        w.send(Req::Save(new.clone()));
+        assert!(matches!(next(&w), Resp::Saved));
+        let p = pad.lock();
+        assert_eq!(p.stored, new);
+        assert!(!p.recovery);
+    }
+
+    #[test]
+    fn a_save_whose_check_timed_out_but_landed_is_accepted() {
+        let (pad, w, s) = setup();
+        pad.lock().no_reboot = true; // the reboot check fails...
+        let new = edited(&s.record);
+        w.send(Req::Save(new.clone()));
+        assert!(matches!(next(&w), Resp::Failed(_)));
+        {
+            let mut p = pad.lock(); // ...but the record landed, and it restarts later
+            assert_eq!(p.stored, new);
+            p.no_reboot = false;
+            p.restart();
+        }
+        w.send(Req::Check(new));
+        assert!(
+            matches!(next(&w), Resp::Checked),
+            "the attempted record counts as known"
+        );
+    }
+
+    #[test]
+    fn reopening_needs_the_same_serial_number() {
+        let (pad, w, s) = setup();
+        {
+            let mut p = pad.lock();
+            p.restart();
+            p.away = 1000; // our pad is gone (find() fails); the path still opens
+        }
+        w.send(Req::Save(s.record));
+        let Resp::Failed(m) = next(&w) else {
+            panic!("not refused")
+        };
+        assert!(m.contains("isn't plugged in"), "{m}");
         assert_eq!(pad.lock().commits, 0);
     }
 }
