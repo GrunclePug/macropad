@@ -1,34 +1,21 @@
 # Build, flash and test. Firmware builds use arduino-cli and the profile in
 # sketch.yaml; tests build the pure logic natively with the host's g++.
-#   make                          build the default variant
-#   make VARIANT=deck             build another variant
+#   make                          build the firmware
 #   make upload PORT=/dev/ttyACM0 build and flash
 #   make SELFTEST=1 upload ...    on-device self-test build
 #   make test                     native tests
 #   make clean
 
-VARIANTS := pad deck
-VARIANT  ?= pad
-
-ifeq ($(filter $(VARIANT),$(VARIANTS)),)
-$(error unknown VARIANT '$(VARIANT)'; known: $(VARIANTS))
-endif
-
-ifneq ($(SELFTEST),)
-ifneq ($(VARIANT),pad)
-$(error the self-test is written for VARIANT=pad)
-endif
-endif
-
-DEFINES := -DMACROPAD_VARIANT_$(shell echo $(VARIANT) | tr a-z A-Z)$(if $(SELFTEST), -DMACROPAD_SELFTEST)
-BUILD   := .build/$(VARIANT)$(if $(SELFTEST),-selftest)
+DEFINES := $(if $(SELFTEST),-DMACROPAD_SELFTEST)
+BUILD   := .build/$(if $(SELFTEST),selftest,firmware)
 CLI     := arduino-cli compile --warnings all --build-path $(BUILD) \
            --build-property "compiler.cpp.extra_flags=$(DEFINES)"
 
-TEST_SRC := $(wildcard test/*.cpp) src/input.cpp src/hid.cpp src/core.cpp \
-            src/tools/tools.cpp src/settings_key.cpp
+TEST_SRC := $(wildcard test/*.cpp) src/input.cpp src/hid.cpp src/core.cpp src/link.cpp \
+            src/config.cpp src/boot.cpp src/runtime.cpp src/knock.cpp src/proto.cpp \
+            src/tools/tools.cpp src/tools/schema.cpp
 
-.PHONY: build upload test clean
+.PHONY: build upload test vectors clean
 
 build:
 	$(CLI) .
@@ -43,6 +30,12 @@ test:
 	@mkdir -p .build
 	$(CXX) -std=c++11 -Wall -Wextra -Werror -O1 -o .build/tests $(TEST_SRC)
 	./.build/tests
+
+vectors:
+	@mkdir -p .build test/vectors
+	$(CXX) -std=c++11 -Wall -Wextra -Werror -O1 -o .build/gen_vectors test/gen/gen_vectors.cpp \
+		src/config.cpp src/tools/schema.cpp
+	./.build/gen_vectors
 
 clean:
 	rm -rf .build

@@ -1,0 +1,13 @@
+#!/bin/sh
+# Fail if a Windows exe imports a DLL that isn't part of Windows.
+set -eu
+exe=$1
+dlls=$(objdump -p "$exe" | sed -n 's/^\s*DLL Name: //p' | sort -u)
+echo "$dlls"
+bad=$(echo "$dlls" | grep -viE '^(kernel32|user32|gdi32|advapi32|shell32|ole32|oleaut32|comctl32|comdlg32|ws2_32|bcrypt|bcryptprimitives|ntdll|userenv|dwmapi|imm32|uxtheme|winmm|setupapi|cfgmgr32|hid|opengl32|dxgi|d3d12|d3dcompiler_47|dcomp|propsys|shlwapi|version|crypt32|secur32|api-ms-win-[a-z0-9-]+|msvcrt|ucrtbase|vcruntime140|uiautomationcore|combase|powrprof|oleacc|msimg32)\.dll$' || true)
+if [ -n "$bad" ]; then
+	echo "not Windows system DLLs:" >&2
+	echo "$bad" >&2
+	exit 1
+fi
+echo "only Windows system DLLs"
