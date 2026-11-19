@@ -303,12 +303,21 @@ impl App {
         self.session = Some(s);
     }
 
-    /// Back to the setup read at Connect: no draft is left to keep.
+    /// Back to the setup read at Connect. After a faulted Connect that read
+    /// the pad's running setup (`cfg ok`, no crc), that setup is the draft
+    /// (the pad's unsaved edits): its mark stays. Otherwise (a fallback
+    /// read, or a verified one) no draft is left to keep.
     fn revert(&mut self) {
         if let Some(s) = &self.snapshot {
             self.cfg = s.clone();
             self.error = None;
-            self.unverified_draft = None;
+            let running = self
+                .session
+                .as_ref()
+                .is_some_and(|s| s.hello.cfg == "ok" && s.hello.crc.is_none());
+            if !running {
+                self.unverified_draft = None;
+            }
         }
     }
 
@@ -1558,6 +1567,27 @@ mod tests {
         a.connecting_serial = Some("A".into());
         a.on_connect(fault_session("ok", Some(1), 3, &later));
         assert_eq!(a.cfg, later, "the saved draft no longer overrides the pad");
+    }
+
+    #[test]
+    fn a_revert_to_the_running_setup_keeps_the_draft() {
+        let mut a = app();
+        let stored = builtin("pad").expect("pad");
+        let mut running = stored.clone();
+        running.release_ms = 9; // edited on the pad, never stored
+        a.connecting_serial = Some("A".into());
+        a.on_connect(fault_session("ok", None, 1, &running));
+        a.cfg.release_ms = 30; // a desktop edit, then Revert
+        a.revert();
+        assert_eq!(a.cfg, running);
+        assert!(
+            a.unverified_draft.is_some(),
+            "the pad's edits stay protected"
+        );
+        // After the replug the old record reads again: the pad's edits stay.
+        a.connecting_serial = Some("A".into());
+        a.on_connect(fault_session("ok", Some(1), 2, &stored));
+        assert_eq!(a.cfg, running);
     }
 
     #[test]
