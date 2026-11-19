@@ -49,6 +49,9 @@ pub struct App {
     /// unsaved edits, or the editor's own setup): a Connect to that pad after
     /// a restart keeps it rather than taking the stored record or a fallback.
     unverified_draft: Option<u32>,
+    /// The snapshot is the running setup a faulted Connect read (`cfg ok`,
+    /// no crc): the pad's unsaved edits, so Revert to it keeps the draft mark.
+    snapshot_running: bool,
     /// The setup a Save in flight sent.
     saving: Option<Config>,
     /// Saves whose outcome stayed open (a reboot check that timed out, an
@@ -79,6 +82,7 @@ impl App {
             tools: builtin_tools(),
             cfg: builtin("pad").unwrap_or_else(empty_config),
             snapshot: None,
+            snapshot_running: false,
             snapshot_serial: None,
             connecting_serial: None,
             unverified_draft: None,
@@ -126,6 +130,7 @@ impl App {
                     }
                     self.unresolved.clear();
                     self.snapshot = Some(c);
+                    self.snapshot_running = false;
                     // A stored, verified record: no draft is left to keep.
                     self.unverified_draft = None;
                 }
@@ -144,6 +149,7 @@ impl App {
                 self.error = None;
                 if let Some(sent) = self.saving.take() {
                     self.snapshot = Some(sent);
+                    self.snapshot_running = false;
                 }
                 self.unresolved.clear();
                 // The draft is stored and verified now: a later Connect
@@ -265,6 +271,7 @@ impl App {
                     None
                 };
                 self.snapshot = Some(c);
+                self.snapshot_running = s.hello.cfg == "ok" && s.hello.crc.is_none();
                 self.snapshot_serial = self.connecting_serial.take();
                 self.error = None;
                 kept
@@ -311,11 +318,7 @@ impl App {
         if let Some(s) = &self.snapshot {
             self.cfg = s.clone();
             self.error = None;
-            let running = self
-                .session
-                .as_ref()
-                .is_some_and(|s| s.hello.cfg == "ok" && s.hello.crc.is_none());
-            if !running {
+            if !self.snapshot_running {
                 self.unverified_draft = None;
             }
         }
@@ -1577,7 +1580,8 @@ mod tests {
         running.release_ms = 9; // edited on the pad, never stored
         a.connecting_serial = Some("A".into());
         a.on_connect(fault_session("ok", None, 1, &running));
-        a.cfg.release_ms = 30; // a desktop edit, then Revert
+        a.cfg.release_ms = 30; // a desktop edit, then Disconnect and Revert
+        a.handle(Resp::Disconnected);
         a.revert();
         assert_eq!(a.cfg, running);
         assert!(

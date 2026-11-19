@@ -321,6 +321,10 @@ impl Config {
 
 pub fn from_hex(s: &str) -> Result<Vec<u8>> {
     let s = s.trim();
+    // Byte slicing below: a non-ASCII character would split and panic.
+    if !s.is_ascii() {
+        bail!("non-hex characters");
+    }
     if !s.len().is_multiple_of(2) {
         bail!("odd hex length");
     }
@@ -702,6 +706,12 @@ mod tests {
     fn vector(name: &str) -> Vec<u8> {
         let path = format!("{}/../test/vectors/{name}", env!("CARGO_MANIFEST_DIR"));
         from_hex(&std::fs::read_to_string(&path).expect("vector file exists")).expect("valid hex")
+    }
+
+    #[test]
+    fn non_ascii_hex_is_an_error_not_a_panic() {
+        assert!(from_hex("0é0").is_err()); // 4 bytes: a slice at 2 splits the é
+        assert_eq!(from_hex("0aFF").expect("hex"), vec![0x0a, 0xff]);
     }
 
     #[test]
