@@ -23,7 +23,7 @@ struct ProtoEnv {
   // E_VERIFY; on E_OK the app freezes the pad and restarts it.
   uint8_t (*commit)(const uint8_t* rec);
   void (*exit)();
-  void (*test)(const char* what);  // "corrupt", "crash", "detach"
+  void (*test)(const char* what);  // "corrupt", "crash", "run", ...
   // The record staging edits; the app sets it on entering config mode.
   uint8_t staging[CFG_SIZE];
 };

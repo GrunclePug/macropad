@@ -16,6 +16,7 @@ step, state = sys.argv[2], sys.argv[3]   # state: a file that carries the first 
 checks = int(sys.argv[4]) if len(sys.argv) > 4 else 45   # the self-test's check count
 if step == 'first':      # the boot run's report: read, not acknowledged
     s, out = knock_read(4)
+    open(state + '.log', 'w').write(out)   # the whole report, kept with the run's logs
     summaries = [l for l in out.split('\n') if 'checks,' in l]
     print('first report:', summaries)
     for l in out.split('\n'):

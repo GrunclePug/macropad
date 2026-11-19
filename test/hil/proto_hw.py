@@ -8,12 +8,13 @@ Steps (each prints PASS/FAIL):
   3. GET x22, PUT x22 (unchanged), CHECK, COMMIT; reboot check (nonce, cfg ok, crc)
   4. TESTCORRUPT: recovery with cfg invalid 4
   5. DTR-only break mid-PUT: staging back to the default, still recovery
-  6. TESTDETACH mid-PUT: the same after the USB-level break
+  6. A host USB reset mid-PUT (USBDEVFS_RESET, the port reset the kernel
+     does on errors): the same after a USB-level break
   7. COMMIT the staged default: cfg ok
   8. TESTCRASH with a valid record: cfg default crash, crc unchanged
 (A rerun of the self-test and its report: rerun.py.)
 """
-import glob, os, sys, time
+import fcntl, glob, os, sys, time
 import serial
 
 sn, logpath = sys.argv[1], sys.argv[2]
@@ -129,11 +130,28 @@ def put_record(s, rec):
         if l != 'OK': return False
     return True
 
+USBDEVFS_RESET = 0x5514  # _IO('U', 20)
+def usb_reset(tty):
+    """Reset the pad's USB port from the host: a USB-level break without the
+    firmware's soft detach (which leaves the core's driver unreliable). Needs
+    write access to the device node (the Arduino udev rules give it)."""
+    d = os.path.dirname(os.path.realpath('/sys/class/tty/%s/device' % os.path.basename(tty)))
+    bus, dev = (int(open(os.path.join(d, f)).read()) for f in ('busnum', 'devnum'))
+    with open('/dev/bus/usb/%03d/%03d' % (bus, dev), 'wb') as f:
+        fcntl.ioctl(f, USBDEVFS_RESET, 0)
+
+def need(s, what):
+    if s: return
+    check(what + ': the pad is back', False)
+    say('%d checks, %d failed' % (len(results), sum(1 for _, ok in results if not ok)))
+    sys.exit(1)
+
 def crc_of(rec): return '%08x' % int.from_bytes(rec[12:16], 'little')
 
 # 1
 s, h = connect()
 check('knock into config mode', bool(h) and h.get('mode') == 'config', str(h))
+need(s, 'at the start')
 # 2: a request/response flood, as fast as the link allows (the protocol is
 # one request at a time; deep pipelining is a separate residual).
 t = time.time(); oks = 0
@@ -151,10 +169,12 @@ boot0 = h['boot']
 close(s); time.sleep(1.0)
 s, h2 = connect()
 check('restart verified', bool(h2) and h2['boot'] != boot0 and h2['cfg'] == 'ok' and h2['crc'] == crc_of(rec), str(h2))
+need(s, 'after the COMMIT restart')
 # 4
 s.write(b'TESTCORRUPT\n'); close(s); time.sleep(1.5)
 s, h = connect(do_knock=False)
 check('TESTCORRUPT boots into recovery', bool(h) and h['mode'] == 'recovery' and h['cfg'].startswith('invalid'), str(h))
+need(s, 'after TESTCORRUPT')
 default = get_record(s)
 # 5
 changed = bytearray(default); changed[62] = 9  # release debounce
@@ -166,20 +186,26 @@ h = hello(s)
 check('DTR-only break mid-PUT: staging reset, still recovery', l == 'OK' and got == default and h and h['mode'] == 'recovery', str(h))
 # 6
 _, l = req(s, 'PUT\t0\t%s' % bytes(changed[0:64]).hex())
-s.write(b'TESTDETACH\n'); time.sleep(0.2); close(s); time.sleep(3)
+err = ''
+try: usb_reset(s.port)
+except OSError as e: err = 'host USB reset failed: %s' % e
+close(s); time.sleep(3)
 s, h = connect(do_knock=False)
 got = get_record(s) if s else None
-check('USB-level break mid-PUT: staging reset, still recovery', l == 'OK' and got == default and h and h['mode'] == 'recovery', str(h))
+check('USB-level break mid-PUT: staging reset, still recovery', not err and l == 'OK' and got == default and h and h['mode'] == 'recovery', err or str(h))
+need(s, 'after the USB reset')
 # 7
 _, cm = req(s, 'COMMIT')
 close(s); time.sleep(1.0)
 s, h = connect()
 check('COMMIT from recovery: cfg ok', bool(h) and h['cfg'] == 'ok' and h['crc'] == crc_of(default), str(h))
+need(s, 'after the COMMIT from recovery')
 # 8
 crc = h['crc']
 s.write(b'TESTCRASH\n'); close(s); time.sleep(1.5)
 s, h = connect()
 check('TESTCRASH: default crash, record untouched', bool(h) and h['cfg'] == 'default crash' and h['crc'] == crc, str(h))
+need(s, 'after TESTCRASH')
 req(s, 'EXIT'); close(s)
 say('%d checks, %d failed' % (len(results), sum(1 for _, ok in results if not ok)))
 sys.exit(1 if any(not ok for _, ok in results) else 0)

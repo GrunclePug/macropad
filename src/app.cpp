@@ -1,6 +1,9 @@
 #include "app.h"
 
 #include <Arduino.h>
+#include <esp32s3/rom/cache.h>
+#include <esp_system.h>
+#include <soc/soc.h>
 
 #include "boot.h"
 #include "cdc.h"
@@ -164,11 +167,6 @@ void do_test(const char* what) {
     restart_armed = true;
     restart_at = millis() + 200;
   }
-  if (!strcmp(what, "detach")) {
-    usb_detach(true);
-    delay(1500);
-    usb_detach(false);
-  }
   if (!strcmp(what, "run")) {
     selftest_restart();
     begin_leave("Self-test");
@@ -279,6 +277,22 @@ void finish_leave(uint32_t now) {
   }
 }
 
+// The core's double-tap reset (variants/arduino_nano_nora/variant.cpp and
+// double_tap.c) keeps three magic words in PSRAM, 0x20 bytes below its end,
+// and at boot switches to the factory recovery image when it finds them. Once
+// they stayed behind after one of our restarts: every boot then went to the
+// recovery image and back until a power cycle (PLAN 9ze). Clear them when our
+// code starts (the core's check is over by then, so a real double tap still
+// works) and again before each software restart, and write them out to PSRAM:
+// esp_restart() turns the data cache off without writing it back.
+void clear_double_tap() {
+  if (!psramFound()) return;
+  uint32_t at = SOC_EXTRAM_DATA_HIGH - 0x20 - 3 * sizeof(uint32_t);
+  volatile uint32_t* m = (volatile uint32_t*)at;
+  m[0] = m[1] = m[2] = 0;
+  Cache_WriteBack_Addr(at, 3 * sizeof(uint32_t));
+}
+
 bool crash_reset() {
   switch (esp_reset_reason()) {
     case ESP_RST_PANIC:
@@ -330,6 +344,8 @@ bool app_fixture_running() {
 }
 
 void app_setup() {
+  clear_double_tap();
+  esp_register_shutdown_handler(clear_double_tap);
   cdc_begin();
   uint32_t nonce = esp_random();
   led_begin();

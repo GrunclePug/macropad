@@ -199,7 +199,6 @@ void Proto::handle(char* line, Link& link) {
     link.reply("OK");
     if (!strcmp(cmd, "TESTCORRUPT")) env_.test("corrupt");
     if (!strcmp(cmd, "TESTCRASH")) env_.test("crash");
-    if (!strcmp(cmd, "TESTDETACH")) env_.test("detach");
     if (!strcmp(cmd, "TESTRUN")) env_.test("run");
     if (!strcmp(cmd, "TESTTAP")) env_.test("tap");
     if (!strcmp(cmd, "TESTACK")) env_.test("ack");
