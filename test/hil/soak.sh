@@ -43,6 +43,8 @@ up() {
 
 make > "$T/build.log" 2>&1 && make SELFTEST=1 >> "$T/build.log" 2>&1 && make -C client build >> "$T/build.log" 2>&1 ||
 	{ tail -5 "$T/build.log"; fail build; exit 1; }
+# A self-test left running may have the pad off USB for a moment.
+for _ in $(seq 1 60); do [ -n "$(dev)" ] && break; sleep 0.5; done
 [ -n "$(dev)" ] || { fail "no serial port for $SN"; exit 1; }
 usbpath=$(udevadm info -q path -n "$(dev)" 2>/dev/null | sed -n 's|.*/\([0-9-]*[0-9.]*\):[0-9.]*/tty/.*|\1|p')
 since=$(date '+%Y-%m-%d %H:%M:%S')

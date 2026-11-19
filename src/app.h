@@ -28,5 +28,8 @@ const Runtime& app_runtime();
 Config& app_config();
 // The self-test may drive pins only on a normal boot running its fixture.
 bool app_fixture_running();
+// Self-test: planted double-tap words are cleared; the guard ran before the core's check.
+bool app_double_tap_check();
+bool app_double_tap_guard_first();
 
 }  // namespace mp

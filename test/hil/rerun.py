@@ -13,7 +13,7 @@ def knock_read(secs):
     while time.time() < end: buf += s.read(4096)
     return s, buf.decode(errors='replace')
 step, state = sys.argv[2], sys.argv[3]   # state: a file that carries the first report's summary
-checks = int(sys.argv[4]) if len(sys.argv) > 4 else 45   # the self-test's check count
+checks = int(sys.argv[4]) if len(sys.argv) > 4 else 47   # the self-test's check count
 if step == 'first':      # the boot run's report: read, not acknowledged
     s, out = knock_read(4)
     open(state + '.log', 'w').write(out)   # the whole report, kept with the run's logs

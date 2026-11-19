@@ -131,7 +131,7 @@ Every input uses the Nano's internal pull-up and switches to GND. No other parts
 | A4 (SDA), A5 (SCL) | OLED | OLED |
 | 3V3, GND | OLED power | OLED power |
 
-Leave A2 (a boot strapping pin), D0 and D1 free. Keep the Nano's reset button reachable in a case: a double tap on it is the recovery path.
+Leave A2 (a boot strapping pin), D0 and D1 free. Keep the Nano's reset button reachable in a case: it restarts the pad. Arduino's double tap into recovery mode didn't work on the Nano ESP32 tested here; if a pad ever won't take an upload, hold B1 to GND while plugging it in (ROM download mode) and flash it with esptool.
 
 ## Self-test
 

@@ -157,8 +157,8 @@ void report() {
     fails += !checks[i].pass;
   }
   if (nlat)
-    rep("latency_us n=%d min=%lu p50=%lu p99=%lu max=%lu", nlat, (unsigned long)lat[0],
-                (unsigned long)lat[nlat / 2], (unsigned long)p99(), (unsigned long)lat[nlat - 1]);
+    rep("latency_us n=%d min=%lu p50=%lu p99=%lu max=%lu over_1ms=%d", nlat, (unsigned long)lat[0],
+                (unsigned long)lat[nlat / 2], (unsigned long)p99(), (unsigned long)lat[nlat - 1], over_1ms());
   rep("chords ok=%d split=%d", chord_ok, chord_split);
   rep("cleanup screen=%d set=%d menu=%d cursor=%d buttons=%x keys=%d killed=%d repeated_holds=%d", cleanup_state[0],
       cleanup_state[1], cleanup_state[2], cleanup_state[3], cleanup_state[4], cleanup_state[5], cleanup_state[6],
@@ -306,6 +306,8 @@ void selftest_step(uint32_t now) {
       NAV = app_runtime().button_pins[1];
       check("boot: osu shown, not killed, tools off",
             core.screen() == Core::Screen::Keys && core.set() == 0 && !core.killed() && !core.enabled(0));
+      check("boot: planted double-tap words are cleared", app_double_tap_check());
+      check("boot: the double-tap guard ran before the core's check", app_double_tap_guard_first());
 
       // --- Arming: killswitch on, arm autoclicker and jitter, killswitch off ---
       TAP(KILL);
@@ -379,7 +381,9 @@ void selftest_step(uint32_t now) {
       // 200) lands near 0.6 or 1.1 ms run to run. Check the median, the share
       // that waited, p99, and that even the slowest waited one frame at most.
       check("latency median <= 0.75 ms", nlat && lat[nlat / 2] <= 750);
-      check("latency: at most 2 % of presses over 1 ms", nlat && over_1ms() * 50 <= nlat);
+      // 4 % per run: at the usual ~1 % one-frame rate, 2 % of 200 fails one run in
+      // 20 by chance. run.sh holds the pooled count of its runs to 2 %.
+      check("latency: at most 4 % of presses over 1 ms", nlat && over_1ms() * 25 <= nlat);
       check("latency p99 <= 1.25 ms (one extra USB frame at most)", nlat && p99() <= 1250);
       check("latency: slowest press <= 1.5 ms", nlat && lat[nlat - 1] <= 1500);
       check("no loop gap over 2 ms", stats.gaps_over_2ms == 0);

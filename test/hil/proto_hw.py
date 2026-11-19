@@ -12,6 +12,7 @@ Steps (each prints PASS/FAIL):
      does on errors): the same after a USB-level break
   7. COMMIT the staged default: cfg ok
   8. TESTCRASH with a valid record: cfg default crash, crc unchanged
+  9. TESTDOUBLETAP (the core's double-tap words left in PSRAM): a normal boot
 (A rerun of the self-test and its report: rerun.py.)
 """
 import fcntl, glob, os, sys, time
@@ -184,7 +185,8 @@ buf = b''
 got = get_record(s)
 h = hello(s)
 check('DTR-only break mid-PUT: staging reset, still recovery', l == 'OK' and got == default and h and h['mode'] == 'recovery', str(h))
-# 6
+# 6: the same boot afterwards, so a restart can't pass for the break
+boot_r = h['boot'] if h else None
 _, l = req(s, 'PUT\t0\t%s' % bytes(changed[0:64]).hex())
 err = ''
 try: usb_reset(s.port)
@@ -192,7 +194,7 @@ except OSError as e: err = 'host USB reset failed: %s' % e
 close(s); time.sleep(3)
 s, h = connect(do_knock=False)
 got = get_record(s) if s else None
-check('USB-level break mid-PUT: staging reset, still recovery', not err and l == 'OK' and got == default and h and h['mode'] == 'recovery', err or str(h))
+check('USB-level break mid-PUT: staging reset, still recovery, same boot', not err and l == 'OK' and got == default and h and h['mode'] == 'recovery' and h['boot'] == boot_r, err or str(h))
 need(s, 'after the USB reset')
 # 7
 _, cm = req(s, 'COMMIT')
@@ -206,6 +208,14 @@ s.write(b'TESTCRASH\n'); close(s); time.sleep(1.5)
 s, h = connect()
 check('TESTCRASH: default crash, record untouched', bool(h) and h['cfg'] == 'default crash' and h['crc'] == crc, str(h))
 need(s, 'after TESTCRASH')
+# 9: the double-tap words a reset in the core's boot window leaves behind.
+# The firmware clears them before the core's check, so the pad boots normally
+# (without that: a loop with the recovery image until a power cycle, PLAN 9ze).
+boot9 = h['boot']
+_, l9 = req(s, 'TESTDOUBLETAP'); close(s); time.sleep(1.5)
+s, h = connect()
+check('TESTDOUBLETAP: words left in PSRAM, the pad boots normally', l9 == 'OK' and bool(h) and h['boot'] != boot9 and h['cfg'] == 'ok', str(h))
+need(s, 'after TESTDOUBLETAP')
 req(s, 'EXIT'); close(s)
 say('%d checks, %d failed' % (len(results), sum(1 for _, ok in results if not ok)))
 sys.exit(1 if any(not ok for _, ok in results) else 0)

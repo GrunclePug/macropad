@@ -5,7 +5,8 @@ s.reset_output_buffer(); s.dtr = False; time.sleep(0.5); s.dtr = True; time.slee
 last = ''
 for c in (b'HELLO\n', b'COMMIT\n'):
     s.write(c); buf = b''; end = time.time() + 2
-    while time.time() < end and b'OK' not in buf and b'ERR' not in buf: buf += s.read(512)
+    # Until a whole reply line: OK alone may arrive before the crc.
+    while time.time() < end and not re.search(rb'^(OK|ERR)[^\n]*\n', buf, re.M): buf += s.read(512)
     last = buf.decode(errors='replace').strip()
     print(last[-120:])
 s.close()

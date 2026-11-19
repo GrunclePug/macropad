@@ -20,10 +20,11 @@ def find(timeout=15):
         time.sleep(0.1)
     return None
 
-def opn():
-    p = find()
+def opn(timeout=15):
+    p = find(timeout)
     if not p: raise RuntimeError('pad not found')
-    for _ in range(20):
+    end = time.monotonic() + min(timeout, 4)
+    while time.monotonic() < end:
         try:
             s = serial.Serial(); s.port = p; s.baudrate = 115200; s.timeout = 0.005
             s.write_timeout = 1; s.dtr = True; s.rts = True; s.open(); return s
@@ -107,11 +108,12 @@ def back(boot0, do_knock, secs=20):
         try:
             p = find(timeout=max(0.1, end - time.monotonic()))
             if p:
-                s = opn()
+                s = opn(max(0.1, end - time.monotonic()))
                 h = hello(s)
                 if not h and do_knock:
                     knock(s); h = hello(s)
-                if h and h['boot'] != boot0: return s, h
+                # Only within the deadline: a HELLO that ends after it is late.
+                if h and h['boot'] != boot0 and time.monotonic() <= end: return s, h
         except Exception:
             pass
         if s: close(s)

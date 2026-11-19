@@ -351,11 +351,13 @@ impl App {
         // the old record back doesn't drop those edits unseen.
         // Only after a restart: a second faulted Connect in the same boot
         // rebases onto the newer running setup below instead.
+        // Kept even when it equals what this boot served (a fallback may be
+        // the very default the draft holds), so a later boot can't drop it.
         if std::mem::take(&mut self.unverified_draft).is_some_and(|b| b != boot) && same_pad {
             if self.cfg != *pad {
                 self.notice = Some(DRAFT.into());
             }
-            return (self.cfg.clone(), self.cfg != *pad);
+            return (self.cfg.clone(), true);
         }
         if same_pad && !usable && self.snapshot.is_some() {
             if self.cfg != *pad {
@@ -1462,6 +1464,34 @@ mod tests {
         a.connecting_serial = Some("A".into());
         a.on_connect(fault_session("ok", Some(1), 3, &old));
         assert_eq!(a.cfg, running, "and survives to a verified Connect");
+        assert!(
+            a.notice
+                .as_ref()
+                .expect("notice")
+                .contains("before the restart")
+        );
+    }
+
+    #[test]
+    fn a_draft_equal_to_a_fallback_survives_it() {
+        let mut a = app();
+        let default = builtin("pad").expect("pad");
+        let mut stored = default.clone();
+        stored.release_ms = 9;
+        // Boot 1 faulted while running the default (its unsaved state).
+        a.connecting_serial = Some("A".into());
+        a.on_connect(fault_session("ok", None, 1, &default));
+        // Boot 2: a crash boot serves that same default, faulted again.
+        a.connecting_serial = Some("A".into());
+        a.on_connect(fault_session("ok default", None, 2, &default));
+        assert_eq!(a.cfg, default);
+        // Boot 3 reads the older stored record: the draft stays.
+        a.connecting_serial = Some("A".into());
+        a.on_connect(fault_session("ok", Some(1), 3, &stored));
+        assert_eq!(
+            a.cfg, default,
+            "the draft isn't replaced by the stored record"
+        );
         assert!(
             a.notice
                 .as_ref()

@@ -2,7 +2,11 @@
 
 #include <Arduino.h>
 #include <esp32s3/rom/cache.h>
+#include <double_tap.h>  // the core's (variants/arduino_nano_nora)
+#include <esp32s3/rom/rtc.h>
+#include <esp32s3/spiram.h>
 #include <esp_system.h>
+#include <esp_timer.h>
 #include <soc/soc.h>
 
 #include "boot.h"
@@ -156,6 +160,8 @@ void begin_leave(const char* msg) {
 
 void do_exit() { begin_leave("Config closed"); }
 
+void plant_double_tap();  // below, with the guard
+
 void do_test(const char* what) {
 #ifdef MACROPAD_SELFTEST
   if (!strcmp(what, "crash")) abort();
@@ -164,6 +170,11 @@ void do_test(const char* what) {
     config_encode(cfg, bad);
     bad[12] ^= 0xFF;  // break the CRC
     store_write(bad);
+    restart_armed = true;
+    restart_at = millis() + 200;
+  }
+  if (!strcmp(what, "doubletap")) {
+    plant_double_tap();  // what a reset in the core's boot window leaves behind
     restart_armed = true;
     restart_at = millis() + 200;
   }
@@ -278,20 +289,45 @@ void finish_leave(uint32_t now) {
 }
 
 // The core's double-tap reset (variants/arduino_nano_nora/variant.cpp and
-// double_tap.c) keeps three magic words in PSRAM, 0x20 bytes below its end,
-// and at boot switches to the factory recovery image when it finds them. Once
-// they stayed behind after one of our restarts: every boot then went to the
-// recovery image and back until a power cycle (PLAN 9ze). Clear them when our
-// code starts (the core's check is over by then, so a real double tap still
-// works) and again before each software restart, and write them out to PSRAM:
-// esp_restart() turns the data cache off without writing it back.
+// double_tap.c) keeps three magic words in PSRAM, 0x20 bytes below its end.
+// A global constructor (init_priority 101) sets them for ~0.9 s at every boot
+// and switches to the factory recovery image when it finds them. A reset in
+// that window leaves them behind, and on this board the recovery image doesn't
+// see them: every boot then went to the recovery image and back until a power
+// cycle (PLAN 9ze). So clear them before the core's check (priority 100 runs
+// first: the linker sorts .ctors.* and IDF runs the table from the end; that
+// also puts the core's constructor after every default-priority one, harmless
+// since constructors never touch hardware). Only after a software restart:
+// every boot of the loop is one, and a real double tap is a hardware reset, so
+// it still reaches recovery mode on a board where that works. The spot is
+// inside the PSRAM heap, so only the exact words are cleared, and the line is
+// written out to PSRAM.
+const uint32_t DOUBLE_TAP_AT = SOC_EXTRAM_DATA_HIGH - 0x20 - 3 * sizeof(uint32_t);
+const uint32_t DOUBLE_TAP_WORDS[3] = {0xf01681de, 0xbd729b29, 0xd359be7a};  // double_tap.c
+
 void clear_double_tap() {
-  if (!psramFound()) return;
-  uint32_t at = SOC_EXTRAM_DATA_HIGH - 0x20 - 3 * sizeof(uint32_t);
-  volatile uint32_t* m = (volatile uint32_t*)at;
-  m[0] = m[1] = m[2] = 0;
-  Cache_WriteBack_Addr(at, 3 * sizeof(uint32_t));
+  if (!esp_spiram_is_initialized()) return;
+  volatile uint32_t* m = (volatile uint32_t*)DOUBLE_TAP_AT;
+  if (m[0] == DOUBLE_TAP_WORDS[0] && m[1] == DOUBLE_TAP_WORDS[1] && m[2] == DOUBLE_TAP_WORDS[2])
+    m[0] = m[1] = m[2] = 0;
+  Cache_WriteBack_Addr(DOUBLE_TAP_AT, sizeof DOUBLE_TAP_WORDS);
 }
+
+// The words as the core leaves them, by the core's own code: TESTDOUBLETAP.
+void plant_double_tap() {
+  if (esp_spiram_is_initialized()) double_tap_mark();
+}
+
+int64_t double_tap_guard_us = -1;  // when the guard ran (the self-test checks it ran first)
+int64_t setup_us = -1;
+
+struct DoubleTapGuard {
+  DoubleTapGuard() {
+    if (rtc_get_reset_reason(0) == RTC_SW_CPU_RESET) clear_double_tap();
+    double_tap_guard_us = esp_timer_get_time();
+  }
+};
+DoubleTapGuard double_tap_guard __attribute__((init_priority(100)));
 
 bool crash_reset() {
   switch (esp_reset_reason()) {
@@ -344,8 +380,7 @@ bool app_fixture_running() {
 }
 
 void app_setup() {
-  clear_double_tap();
-  esp_register_shutdown_handler(clear_double_tap);
+  setup_us = esp_timer_get_time();
   cdc_begin();
   uint32_t nonce = esp_random();
   led_begin();
@@ -471,5 +506,26 @@ void app_loop() {
   stats.force_redraw = false;
   led_update(core);
 }
+
+#ifdef MACROPAD_SELFTEST
+// Plants the double-tap words with the core's own code, runs our clear, and
+// lets the core put the old contents back (it's heap memory). True if the core
+// saw them and then didn't: our address and words are the core's.
+bool app_double_tap_check() {
+  if (!esp_spiram_is_initialized()) return false;
+  double_tap_mark();
+  bool planted = double_tap_check_match();
+  clear_double_tap();
+  bool cleared = !double_tap_check_match();
+  double_tap_invalidate();
+  return planted && cleared;
+}
+
+// The guard ran before the core's check: the core's ~0.9 s LED fade lies
+// between the two.
+bool app_double_tap_guard_first() {
+  return double_tap_guard_us >= 0 && setup_us - double_tap_guard_us >= 800000;
+}
+#endif
 
 }  // namespace mp

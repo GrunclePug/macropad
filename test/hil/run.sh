@@ -16,7 +16,7 @@ SN=${1:?usage: run.sh SERIAL}
 H=$(cd "$(dirname "$0")" && pwd)
 cd "$H/../.." || exit 1
 fails=0
-CHECKS=45  # the self-test's check count
+CHECKS=47  # the self-test's check count
 T=$(mktemp -d)
 # Logs stay when anything failed: they're the evidence.
 trap '[ "$fails" -eq 0 ] && rm -rf "$T" || echo "logs kept in $T"' EXIT
@@ -60,6 +60,8 @@ up() {
 
 make > "$T/build.log" 2>&1 && make SELFTEST=1 >> "$T/build.log" 2>&1 && make -C client build >> "$T/build.log" 2>&1 ||
 	{ tail -5 "$T/build.log"; fail build; exit 1; }
+# A self-test left running may have the pad off USB for a moment.
+for _ in $(seq 1 60); do [ -n "$(dev)" ] && break; sleep 0.5; done
 [ -n "$(dev)" ] || { fail "no serial port for $SN"; exit 1; }
 # The USB path of the pad's port, for the kernel log check at the end.
 usbpath=$(udevadm info -q path -n "$(dev)" 2>/dev/null | sed -n 's|.*/\([0-9-]*[0-9.]*\):[0-9.]*/tty/.*|\1|p')
@@ -83,9 +85,19 @@ if up .build/selftest; then
 	sleep 100
 	step "rerun: first report" 2 timeout 60 python3 -I -u "$H/rerun.py" "$SN" first "$T/first" "$CHECKS"
 	step "rerun" 1 timeout 90 python3 -I -u "$H/rerun.py" "$SN" rerun "$T/first" "$CHECKS"
+	# Each run allows 4 % over 1 ms (chance alone fails 2 % of 200 in one run
+	# of 20); the runs together must stay at 2 %.
+	pooled=$(cat "$T"/st-*.log "$T/first.log" 2> /dev/null |
+		sed -n 's/.*latency_us n=\([0-9]*\) .*over_1ms=\([0-9]*\).*/\1 \2/p' | awk '{n += $1; k += $2} END {print n + 0, k + 0}')
+	np=${pooled% *} kp=${pooled#* }
+	if [ "$np" -ge 800 ] && [ $((kp * 50)) -le "$np" ]; then
+		echo "PASS latency across the runs: $kp of $np presses over 1 ms"
+	else
+		fail "latency across the runs: $kp of $np presses over 1 ms (at most 2 %, from 800 presses)"
+	fi
 	timeout 30 python3 -I -u "$H/commit.py" "$SN" > "$T/commit.log" 2>&1 || { cat "$T/commit.log"; fail "commit before the protocol checks"; }
 	sleep 3
-	step "protocol checks" 10 timeout 500 python3 -I -u "$H/proto_hw.py" "$SN" "$T/proto.log"
+	step "protocol checks" 11 timeout 500 python3 -I -u "$H/proto_hw.py" "$SN" "$T/proto.log"
 	step "fresh pad" 2 timeout 90 python3 -I -u "$H/fresh.py" "$SN" erase
 	if [ -f "$T/before.toml" ]; then
 		if timeout 60 $CLIENT push --port "$(dev)" "$T/before.toml" > "$T/push.log" 2>&1; then
