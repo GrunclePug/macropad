@@ -303,6 +303,15 @@ impl App {
         self.session = Some(s);
     }
 
+    /// Back to the setup read at Connect: no draft is left to keep.
+    fn revert(&mut self) {
+        if let Some(s) = &self.snapshot {
+            self.cfg = s.clone();
+            self.error = None;
+            self.unverified_draft = None;
+        }
+    }
+
     fn connect(&mut self) {
         let Some(p) = self.ports.get(self.port) else {
             self.error = Some("No serial port picked.".into());
@@ -491,10 +500,8 @@ impl App {
                 .add_enabled(changed, egui::Button::new("Revert"))
                 .on_hover_text("Go back to the setup read at Connect")
                 .clicked()
-                && let Some(s) = &self.snapshot
             {
-                self.cfg = s.clone();
-                self.error = None;
+                self.revert();
             }
             ui.separator();
             ui.label("Load preset:");
@@ -1504,12 +1511,17 @@ mod tests {
             a.connecting_serial = Some("A".into());
             a.on_connect(fault_session("ok default", None, 2, &default));
             assert_eq!(a.cfg, default);
+            assert!(a.unverified_draft.is_some(), "still marked as a draft");
         }
         let mut recovery = fault_session("invalid 4", None, 4, &default);
         recovery.hello.mode = "recovery".into();
         a.connecting_serial = Some("A".into());
         a.on_connect(recovery);
         assert_eq!(a.cfg, default);
+        assert!(
+            a.unverified_draft.is_some(),
+            "a recovery boot keeps the mark"
+        );
         // Boot 5 reads the older stored record: the draft stays.
         a.connecting_serial = Some("A".into());
         a.on_connect(fault_session("ok", Some(1), 5, &stored));
@@ -1537,6 +1549,7 @@ mod tests {
         recovery.hello.mode = "recovery".into();
         a.connecting_serial = Some("A".into());
         a.on_connect(recovery);
+        assert_eq!(a.cfg, running, "recovery keeps the draft in the editor");
         a.saving = Some(a.cfg.clone());
         a.handle(Resp::Saved);
         // Later the pad's setup changed on the pad; a verified Connect takes it.
@@ -1545,6 +1558,27 @@ mod tests {
         a.connecting_serial = Some("A".into());
         a.on_connect(fault_session("ok", Some(1), 3, &later));
         assert_eq!(a.cfg, later, "the saved draft no longer overrides the pad");
+    }
+
+    #[test]
+    fn a_revert_ends_the_draft() {
+        let mut a = app();
+        let default = builtin("pad").expect("pad");
+        let mut running = default.clone();
+        running.release_ms = 9;
+        a.connecting_serial = Some("A".into());
+        a.on_connect(fault_session("ok", None, 1, &running)); // a draft
+        let mut recovery = fault_session("invalid 4", None, 2, &default);
+        recovery.hello.mode = "recovery".into();
+        a.connecting_serial = Some("A".into());
+        a.on_connect(recovery);
+        a.revert();
+        assert_eq!(a.cfg, default);
+        let mut stored = default.clone();
+        stored.release_ms = 14;
+        a.connecting_serial = Some("A".into());
+        a.on_connect(fault_session("ok", Some(1), 3, &stored));
+        assert_eq!(a.cfg, stored, "after a Revert the pad's record is taken");
     }
 
     #[test]

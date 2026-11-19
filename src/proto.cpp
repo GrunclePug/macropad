@@ -195,11 +195,14 @@ void Proto::handle(char* line, Link& link) {
     // These need normal mode afterwards: not in recovery.
     if (env_.recovery && (!strcmp(cmd, "TESTRUN") || !strcmp(cmd, "TESTTAP") || !strcmp(cmd, "TESTACK")))
       return err(link, E_MODE, 0, "not in recovery");
-    // A question, not an action: did this boot's guard clear the words?
-    if (!strcmp(cmd, "TESTDOUBLETAP") && n > 1 && !strcmp(f[1], "cleared")) {
+    // A question, not an action: did this boot's guard clear the words? Its
+    // own reply, so firmware without the question can't pass for it; any
+    // other argument is refused, so only the bare command restarts the pad.
+    if (!strcmp(cmd, "TESTDOUBLETAP") && n > 1) {
+      if (n > 2 || strcmp(f[1], "cleared")) return err(link, E_ARGS, 0, "only: cleared");
       if (!env_.double_tap_cleared) return err(link, E_MODE, 0, "nothing cleared this boot");
       valid();
-      link.reply("OK");
+      link.reply("OK\tcleared");
       return;
     }
     valid();

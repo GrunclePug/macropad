@@ -334,7 +334,9 @@ TEST(proto_errors_and_pacing) {
   // The guard's answer: OK only if this boot's guard cleared the words.
   CHECK(r.ask("TESTDOUBLETAP\tcleared").find("ERR\t101") == 0);
   r.env.double_tap_cleared = true;
-  CHECK(r.ask("TESTDOUBLETAP\tcleared") == "OK\n");
+  CHECK(r.ask("TESTDOUBLETAP\tcleared") == "OK\tcleared\n");
+  CHECK(r.ask("TESTDOUBLETAP\tclear").find("ERR\t102") == 0);
+  CHECK(r.ask("TESTDOUBLETAP\tcleared\tx").find("ERR\t102") == 0);
 }
 
 void run_config_tests() {

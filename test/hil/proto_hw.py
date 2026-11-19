@@ -216,7 +216,7 @@ need(s, 'after TESTCRASH')
 boot9 = h['boot']
 _, l9 = req(s, 'TESTDOUBLETAP'); close(s); time.sleep(1.5)
 s, h = connect()
-cleared = bool(s) and req(s, 'TESTDOUBLETAP\tcleared')[1] == 'OK'
+cleared = bool(s) and req(s, 'TESTDOUBLETAP\tcleared')[1] == 'OK\tcleared'
 check('TESTDOUBLETAP: words left in PSRAM, the guard cleared them, a normal boot', l9 == 'OK' and bool(h) and h['boot'] != boot9 and h['cfg'] == 'ok' and cleared, '%s cleared=%s' % (h, cleared))
 need(s, 'after TESTDOUBLETAP')
 req(s, 'EXIT'); close(s)
