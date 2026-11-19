@@ -63,6 +63,16 @@ done
 echo "pushes: $ok of $PUSHES saved and came back"
 
 if up .build/selftest; then
+	# With nothing stored the self-test runs at boot (and detaches USB), so
+	# store the pad's setup first. If the run already started, the push fails:
+	# wait for it to end (it restarts) and push again.
+	pushed=false
+	for _ in 1 2; do
+		timeout 60 $CLIENT push --port "$(dev)" "$T/before.toml" > "$T/push-st.log" 2>&1 && { pushed=true; break; }
+		sleep 100
+		for _ in $(seq 1 60); do [ -n "$(dev)" ] && break; sleep 0.5; done
+	done
+	$pushed || { tail -2 "$T/push-st.log"; fail "store the setup on the self-test build"; }
 	sleep 1
 	timeout $((CYCLES * 40 + 30)) python3 -I -u "$H/soak.py" "$SN" "$CYCLES" > "$T/soak.log" 2>&1 || fail "recovery cycles"
 	echo "recovery cycles: $(grep -c '^PASS' "$T/soak.log") of $CYCLES came back both times"
