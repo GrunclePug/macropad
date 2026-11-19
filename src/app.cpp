@@ -305,12 +305,14 @@ void finish_leave(uint32_t now) {
 const uint32_t DOUBLE_TAP_AT = SOC_EXTRAM_DATA_HIGH - 0x20 - 3 * sizeof(uint32_t);
 const uint32_t DOUBLE_TAP_WORDS[3] = {0xf01681de, 0xbd729b29, 0xd359be7a};  // double_tap.c
 
-void clear_double_tap() {
-  if (!esp_spiram_is_initialized()) return;
+// True if it found the words and cleared them.
+bool clear_double_tap() {
+  if (!esp_spiram_is_initialized()) return false;
   volatile uint32_t* m = (volatile uint32_t*)DOUBLE_TAP_AT;
-  if (m[0] == DOUBLE_TAP_WORDS[0] && m[1] == DOUBLE_TAP_WORDS[1] && m[2] == DOUBLE_TAP_WORDS[2])
-    m[0] = m[1] = m[2] = 0;
+  bool found = m[0] == DOUBLE_TAP_WORDS[0] && m[1] == DOUBLE_TAP_WORDS[1] && m[2] == DOUBLE_TAP_WORDS[2];
+  if (found) m[0] = m[1] = m[2] = 0;
   Cache_WriteBack_Addr(DOUBLE_TAP_AT, sizeof DOUBLE_TAP_WORDS);
+  return found;
 }
 
 // The words as the core leaves them, by the core's own code: TESTDOUBLETAP.
@@ -319,11 +321,12 @@ void plant_double_tap() {
 }
 
 int64_t double_tap_guard_us = -1;  // when the guard ran (the self-test checks it ran first)
+bool double_tap_cleared = false;   // this boot's guard found the words (TESTDOUBLETAP's proof)
 int64_t setup_us = -1;
 
 struct DoubleTapGuard {
   DoubleTapGuard() {
-    if (rtc_get_reset_reason(0) == RTC_SW_CPU_RESET) clear_double_tap();
+    if (rtc_get_reset_reason(0) == RTC_SW_CPU_RESET) double_tap_cleared = clear_double_tap();
     double_tap_guard_us = esp_timer_get_time();
   }
 };
@@ -438,6 +441,7 @@ void app_setup() {
   env.test = do_test;
 #ifdef MACROPAD_SELFTEST
   env.selftest = true;
+  env.double_tap_cleared = app_double_tap_cleared();
 #endif
   if (boot.mode == BootMode::Recovery) enter_config(true);
 
@@ -526,6 +530,8 @@ bool app_double_tap_check() {
 bool app_double_tap_guard_first() {
   return double_tap_guard_us >= 0 && setup_us - double_tap_guard_us >= 800000;
 }
+
+bool app_double_tap_cleared() { return double_tap_cleared; }
 #endif
 
 }  // namespace mp

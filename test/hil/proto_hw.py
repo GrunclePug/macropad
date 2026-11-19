@@ -211,10 +211,13 @@ need(s, 'after TESTCRASH')
 # 9: the double-tap words a reset in the core's boot window leaves behind.
 # The firmware clears them before the core's check, so the pad boots normally
 # (without that: a loop with the recovery image until a power cycle, PLAN 9ze).
+# The pad says whether this boot's guard found and cleared the words: proof
+# that the check went through the clear, not past it.
 boot9 = h['boot']
 _, l9 = req(s, 'TESTDOUBLETAP'); close(s); time.sleep(1.5)
 s, h = connect()
-check('TESTDOUBLETAP: words left in PSRAM, the pad boots normally', l9 == 'OK' and bool(h) and h['boot'] != boot9 and h['cfg'] == 'ok', str(h))
+cleared = bool(s) and req(s, 'TESTDOUBLETAP\tcleared')[1] == 'OK'
+check('TESTDOUBLETAP: words left in PSRAM, the guard cleared them, a normal boot', l9 == 'OK' and bool(h) and h['boot'] != boot9 and h['cfg'] == 'ok' and cleared, '%s cleared=%s' % (h, cleared))
 need(s, 'after TESTDOUBLETAP')
 req(s, 'EXIT'); close(s)
 say('%d checks, %d failed' % (len(results), sum(1 for _, ok in results if not ok)))

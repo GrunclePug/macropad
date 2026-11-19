@@ -126,6 +126,8 @@ impl App {
                     }
                     self.unresolved.clear();
                     self.snapshot = Some(c);
+                    // A stored, verified record: no draft is left to keep.
+                    self.unverified_draft = None;
                 }
                 if let Some(s) = self.session.as_mut() {
                     s.hello.mode = "config".into();
@@ -144,6 +146,9 @@ impl App {
                     self.snapshot = Some(sent);
                 }
                 self.unresolved.clear();
+                // The draft is stored and verified now: a later Connect
+                // rebases onto the pad's setup again.
+                self.unverified_draft = None;
                 // The pad restarted with this record: out of recovery.
                 if let Some(s) = self.session.as_mut() {
                     s.hello.mode = "config".into();
@@ -200,6 +205,9 @@ impl App {
         // boot) without a crc.
         let unverified =
             (s.hello.cfg == "ok" || s.hello.cfg == "ok default") && s.hello.crc.is_none();
+        let had_draft = self.unverified_draft;
+        let same_pad =
+            self.snapshot_serial.is_some() && self.snapshot_serial == self.connecting_serial;
         let kept_editor = match Config::decode(&s.record) {
             Ok(c) => {
                 // A crc means GET served a stored, validated record (or the
@@ -245,8 +253,17 @@ impl App {
                     });
                 }
                 // Worth keeping: the running setup (rebased onto), or the
-                // editor's own setup kept over a fallback.
-                self.unverified_draft = (unverified && (usable || kept)).then_some(s.hello.boot);
+                // editor's own setup kept over a fallback. A draft stays
+                // marked through any later Connect to this pad that can't
+                // vouch for its setup (no crc: another faulted Connect, a
+                // recovery boot), until a verified one shows it.
+                self.unverified_draft = if unverified && (usable || kept) {
+                    Some(s.hello.boot)
+                } else if s.hello.crc.is_none() && same_pad {
+                    had_draft
+                } else {
+                    None
+                };
                 self.snapshot = Some(c);
                 self.snapshot_serial = self.connecting_serial.take();
                 self.error = None;
@@ -1481,13 +1498,21 @@ mod tests {
         // Boot 1 faulted while running the default (its unsaved state).
         a.connecting_serial = Some("A".into());
         a.on_connect(fault_session("ok", None, 1, &default));
-        // Boot 2: a crash boot serves that same default, faulted again.
+        // Boot 2: a crash boot serves that same default, faulted again,
+        // connected twice; then a recovery boot serves the default too.
+        for _ in 0..2 {
+            a.connecting_serial = Some("A".into());
+            a.on_connect(fault_session("ok default", None, 2, &default));
+            assert_eq!(a.cfg, default);
+        }
+        let mut recovery = fault_session("invalid 4", None, 4, &default);
+        recovery.hello.mode = "recovery".into();
         a.connecting_serial = Some("A".into());
-        a.on_connect(fault_session("ok default", None, 2, &default));
+        a.on_connect(recovery);
         assert_eq!(a.cfg, default);
-        // Boot 3 reads the older stored record: the draft stays.
+        // Boot 5 reads the older stored record: the draft stays.
         a.connecting_serial = Some("A".into());
-        a.on_connect(fault_session("ok", Some(1), 3, &stored));
+        a.on_connect(fault_session("ok", Some(1), 5, &stored));
         assert_eq!(
             a.cfg, default,
             "the draft isn't replaced by the stored record"
@@ -1498,6 +1523,28 @@ mod tests {
                 .expect("notice")
                 .contains("before the restart")
         );
+    }
+
+    #[test]
+    fn a_save_from_recovery_ends_the_draft() {
+        let mut a = app();
+        let default = builtin("pad").expect("pad");
+        let mut running = default.clone();
+        running.release_ms = 9;
+        a.connecting_serial = Some("A".into());
+        a.on_connect(fault_session("ok", None, 1, &running)); // a draft
+        let mut recovery = fault_session("invalid 4", None, 2, &default);
+        recovery.hello.mode = "recovery".into();
+        a.connecting_serial = Some("A".into());
+        a.on_connect(recovery);
+        a.saving = Some(a.cfg.clone());
+        a.handle(Resp::Saved);
+        // Later the pad's setup changed on the pad; a verified Connect takes it.
+        let mut later = running.clone();
+        later.release_ms = 14;
+        a.connecting_serial = Some("A".into());
+        a.on_connect(fault_session("ok", Some(1), 3, &later));
+        assert_eq!(a.cfg, later, "the saved draft no longer overrides the pad");
     }
 
     #[test]

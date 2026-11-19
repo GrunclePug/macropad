@@ -331,6 +331,10 @@ TEST(proto_errors_and_pacing) {
   r.env.selftest = true;
   CHECK(r.ask("TESTRUN").find("ERR\t101") == 0 && r.ask("TESTTAP").find("ERR\t101") == 0 &&
         r.ask("TESTACK").find("ERR\t101") == 0);
+  // The guard's answer: OK only if this boot's guard cleared the words.
+  CHECK(r.ask("TESTDOUBLETAP\tcleared").find("ERR\t101") == 0);
+  r.env.double_tap_cleared = true;
+  CHECK(r.ask("TESTDOUBLETAP\tcleared") == "OK\n");
 }
 
 void run_config_tests() {

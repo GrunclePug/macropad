@@ -11,4 +11,6 @@ for c in (b'HELLO\n', b'COMMIT\n'):
     print(last[-120:])
 s.close()
 # COMMIT answers OK and a crc, then restarts.
-sys.exit(0 if any(re.fullmatch(r'OK\t[0-9a-f]{8}', l.strip()) for l in last.split('\n')) else 1)
+# Only whole lines: a reply cut off at the deadline has no newline yet.
+lines = buf.decode(errors='replace').split('\n')[:-1]
+sys.exit(0 if any(re.fullmatch(r'OK\t[0-9a-f]{8}', l.rstrip('\r')) for l in lines) else 1)

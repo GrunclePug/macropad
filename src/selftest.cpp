@@ -177,7 +177,8 @@ void report() {
 void selftest_begin() {
   hid.on_keys_sent = on_keys;
   cdc_link().keep_logs(true);
-  text_printf("selftest: boot, reset reason %d", (int)esp_reset_reason());
+  text_printf("selftest: boot, reset reason %d, double-tap words cleared %d", (int)esp_reset_reason(),
+              (int)app_double_tap_cleared());
   // A report saved before the restart that ended the last run: hand it out
   // at the next knock instead of running again.
   // It is valid only on the boot right after the run that saved it (marked

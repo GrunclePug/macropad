@@ -31,5 +31,6 @@ bool app_fixture_running();
 // Self-test: planted double-tap words are cleared; the guard ran before the core's check.
 bool app_double_tap_check();
 bool app_double_tap_guard_first();
+bool app_double_tap_cleared();  // this boot's guard found the words and cleared them
 
 }  // namespace mp

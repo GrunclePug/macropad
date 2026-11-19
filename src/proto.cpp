@@ -195,6 +195,13 @@ void Proto::handle(char* line, Link& link) {
     // These need normal mode afterwards: not in recovery.
     if (env_.recovery && (!strcmp(cmd, "TESTRUN") || !strcmp(cmd, "TESTTAP") || !strcmp(cmd, "TESTACK")))
       return err(link, E_MODE, 0, "not in recovery");
+    // A question, not an action: did this boot's guard clear the words?
+    if (!strcmp(cmd, "TESTDOUBLETAP") && n > 1 && !strcmp(f[1], "cleared")) {
+      if (!env_.double_tap_cleared) return err(link, E_MODE, 0, "nothing cleared this boot");
+      valid();
+      link.reply("OK");
+      return;
+    }
     valid();
     link.reply("OK");
     if (!strcmp(cmd, "TESTCORRUPT")) env_.test("corrupt");
